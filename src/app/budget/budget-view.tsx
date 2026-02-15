@@ -336,8 +336,8 @@ export default function BudgetView({ userId }: { userId: string }) {
 
       {/* Quick Add Modal */}
       {showQuickAdd && (
-        <div className="animate-fade-in fixed inset-0 z-50 flex items-end justify-center bg-black/30 backdrop-blur-sm sm:items-center">
-          <div className="animate-slide-up w-full max-w-lg rounded-t-3xl bg-white p-6 shadow-2xl sm:rounded-3xl">
+        <div className="animate-fade-in fixed inset-0 z-[60] flex items-end justify-center bg-black/30 backdrop-blur-sm sm:items-center">
+          <div className="animate-slide-up w-full max-w-lg rounded-t-3xl bg-white p-6 pb-10 shadow-2xl sm:rounded-3xl sm:pb-6 max-h-[90dvh] overflow-y-auto">
             {/* Drag handle */}
             <div className="mb-4 flex justify-center sm:hidden">
               <div className="h-1 w-10 rounded-full bg-slate-200" />
