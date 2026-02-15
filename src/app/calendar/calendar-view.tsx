@@ -62,8 +62,8 @@ export default function CalendarView({ userId }: { userId: string }) {
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
-    const startOfMonth = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-01T00:00:00`;
-    const endOfMonth = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${getDaysInMonth(currentYear, currentMonth)}T23:59:59`;
+    const startOfMonth = new Date(currentYear, currentMonth, 1).toISOString();
+    const endOfMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59).toISOString();
 
     const { data } = await supabase
       .from("events")
@@ -99,7 +99,10 @@ export default function CalendarView({ userId }: { userId: string }) {
   }
 
   function eventsForDate(dateStr: string) {
-    return events.filter((e) => e.start_date.startsWith(dateStr));
+    return events.filter((e) => {
+      const local = new Date(e.start_date);
+      return toLocalDateString(local) === dateStr;
+    });
   }
 
   async function handleQuickAdd(e: React.FormEvent) {
@@ -107,8 +110,8 @@ export default function CalendarView({ userId }: { userId: string }) {
     if (!title.trim()) return;
 
     setSaving(true);
-    const startDate = `${selectedDate}T${startTime}:00`;
-    const endDate = `${selectedDate}T${endTime}:00`;
+    const startDate = new Date(`${selectedDate}T${startTime}`).toISOString();
+    const endDate = new Date(`${selectedDate}T${endTime}`).toISOString();
 
     const { error } = await supabase.from("events").insert({
       user_id: userId,

@@ -14,21 +14,21 @@ export default async function Home() {
   const rawName = user.email?.split("@")[0] ?? "there";
   const firstName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
 
-  // Fetch today's events
+  // Fetch upcoming events (48h window to cover timezone differences on server)
   const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  const todayStr = `${y}-${m}-${d}`;
+  const startWindow = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const endWindow = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
 
   const { data: todayEvents } = await supabase
     .from("events")
     .select("*")
-    .gte("start_date", `${todayStr}T00:00:00`)
-    .lte("start_date", `${todayStr}T23:59:59`)
+    .gte("start_date", startWindow)
+    .lte("start_date", endWindow)
     .order("start_date", { ascending: true });
 
   // Fetch this month's spending total
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
   const startOfMonth = `${y}-${m}-01`;
   const daysInMonth = new Date(y, now.getMonth() + 1, 0).getDate();
   const endOfMonth = `${y}-${m}-${String(daysInMonth).padStart(2, "0")}`;

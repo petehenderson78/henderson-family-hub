@@ -36,6 +36,15 @@ export default function DashboardView({
     setMounted(true);
   }, []);
 
+  // Filter to only events that are actually today in the user's local timezone
+  const localToday = new Date();
+  const todayStr = `${localToday.getFullYear()}-${String(localToday.getMonth() + 1).padStart(2, "0")}-${String(localToday.getDate()).padStart(2, "0")}`;
+  const filteredEvents = todayEvents.filter((evt) => {
+    const d = new Date(evt.start_date);
+    const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return localDate === todayStr;
+  });
+
   return (
     <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
       <div className="mx-auto max-w-lg px-4 pt-10">
@@ -66,7 +75,7 @@ export default function DashboardView({
             </div>
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Today</p>
             <p className="mt-1 text-3xl font-bold text-slate-900">
-              {todayEvents.length}
+              {filteredEvents.length}
             </p>
             <p className="mt-0.5 text-xs text-slate-400">events</p>
           </div>
@@ -90,13 +99,13 @@ export default function DashboardView({
           <h2 className="mb-4 text-lg font-bold tracking-tight text-slate-900">
             Today&apos;s Schedule
           </h2>
-          {todayEvents.length === 0 ? (
+          {filteredEvents.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white/50 py-10 text-center">
               <p className="text-sm text-slate-400">No events today</p>
             </div>
           ) : (
             <ul className="space-y-2.5">
-              {todayEvents.map((evt) => (
+              {filteredEvents.map((evt) => (
                 <li
                   key={evt.id}
                   className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm border-l-4 border-l-emerald-500"
