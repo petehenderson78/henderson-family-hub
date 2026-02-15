@@ -2,7 +2,6 @@
 
 import { createClient } from "@/lib/supabase/client";
 import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
 import type { Event } from "@/lib/types";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -146,89 +145,82 @@ export default function CalendarView({ userId }: { userId: string }) {
   const selectedEvents = eventsForDate(selectedDate);
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24">
-      {/* Header */}
-      <header className="sticky top-0 z-10 bg-white px-4 py-3 shadow-sm">
-        <div className="mx-auto flex max-w-lg items-center justify-between">
-          <Link
-            href="/"
-            className="text-blue-600 active:text-blue-800 text-base font-medium min-h-[44px] flex items-center"
-          >
-            Home
-          </Link>
-          <h1 className="text-lg font-bold text-gray-900">Calendar</h1>
-          <div className="w-14" />
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-lg px-4 pt-4">
+    <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
+      <div className="mx-auto max-w-lg px-4 pt-6">
         {/* Month navigation */}
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-5 flex items-center justify-between">
           <button
             onClick={prevMonth}
-            className="min-h-[44px] min-w-[44px] rounded-lg bg-white text-xl font-bold text-gray-700 shadow-sm active:bg-gray-100"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm active:scale-95 active:bg-slate-50"
           >
-            &lsaquo;
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
           </button>
-          <h2 className="text-xl font-semibold text-gray-900" suppressHydrationWarning>
+          <h2 className="text-lg font-bold tracking-tight text-slate-900" suppressHydrationWarning>
             {formatMonthYear(currentYear, currentMonth)}
           </h2>
           <button
             onClick={nextMonth}
-            className="min-h-[44px] min-w-[44px] rounded-lg bg-white text-xl font-bold text-gray-700 shadow-sm active:bg-gray-100"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm active:scale-95 active:bg-slate-50"
           >
-            &rsaquo;
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="9 6 15 12 9 18" />
+            </svg>
           </button>
         </div>
 
-        {/* Weekday headers */}
-        <div className="mb-1 grid grid-cols-7 text-center text-xs font-semibold text-gray-500">
-          {WEEKDAY_LABELS.map((d) => (
-            <div key={d} className="py-1">
-              {d}
-            </div>
-          ))}
-        </div>
+        {/* Calendar card */}
+        <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+          {/* Weekday headers */}
+          <div className="mb-2 grid grid-cols-7 text-center text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            {WEEKDAY_LABELS.map((d) => (
+              <div key={d} className="py-1">
+                {d}
+              </div>
+            ))}
+          </div>
 
-        {/* Calendar grid */}
-        <div className="grid grid-cols-7 gap-1">
-          {calendarCells.map((day, i) => {
-            if (day === null) return <div key={`empty-${i}`} />;
+          {/* Calendar grid */}
+          <div className="grid grid-cols-7 gap-0.5">
+            {calendarCells.map((day, i) => {
+              if (day === null) return <div key={`empty-${i}`} />;
 
-            const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-            const isToday = mounted && dateStr === todayStr;
-            const isSelected = dateStr === selectedDate;
-            const dayEvents = eventsForDate(dateStr);
+              const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+              const isToday = mounted && dateStr === todayStr;
+              const isSelected = dateStr === selectedDate;
+              const dayEvents = eventsForDate(dateStr);
 
-            return (
-              <button
-                key={dateStr}
-                onClick={() => setSelectedDate(dateStr)}
-                className={`relative flex min-h-[44px] flex-col items-center justify-center rounded-lg text-sm font-medium transition-colors active:scale-95 ${
-                  isSelected
-                    ? "bg-blue-600 text-white"
-                    : isToday
-                      ? "bg-blue-100 text-blue-700"
-                      : "bg-white text-gray-800 active:bg-gray-100"
-                }`}
-              >
-                {day}
-                {dayEvents.length > 0 && (
-                  <span
-                    className={`absolute bottom-1 h-1.5 w-1.5 rounded-full ${
-                      isSelected ? "bg-white" : "bg-blue-500"
-                    }`}
-                  />
-                )}
-              </button>
-            );
-          })}
+              return (
+                <button
+                  key={dateStr}
+                  onClick={() => setSelectedDate(dateStr)}
+                  className={`relative flex min-h-[44px] flex-col items-center justify-center rounded-full text-sm font-medium active:scale-90 ${
+                    isSelected
+                      ? "bg-blue-600 text-white shadow-md shadow-blue-500/30"
+                      : isToday
+                        ? "ring-2 ring-blue-500 ring-offset-1 text-blue-700 font-bold"
+                        : "text-slate-700 hover:bg-slate-50 active:bg-slate-100"
+                  }`}
+                >
+                  {day}
+                  {dayEvents.length > 0 && (
+                    <span
+                      className={`absolute bottom-1.5 h-1 w-1 rounded-full ${
+                        isSelected ? "bg-white" : "bg-emerald-500"
+                      }`}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Selected date events */}
-        <div className="mt-6">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-base font-semibold text-gray-900" suppressHydrationWarning>
+        <div className="mt-7">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-base font-bold text-slate-900" suppressHydrationWarning>
               {mounted
                 ? new Date(selectedDate + "T12:00:00").toLocaleDateString(
                     "en-US",
@@ -242,35 +234,35 @@ export default function CalendarView({ userId }: { userId: string }) {
             </h3>
             <button
               onClick={() => setShowQuickAdd(true)}
-              className="min-h-[44px] rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white shadow-sm active:bg-blue-700"
+              className="min-h-[44px] rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 px-5 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 active:scale-[0.97]"
             >
               + Add Event
             </button>
           </div>
 
           {loading ? (
-            <p className="py-4 text-center text-sm text-gray-500">
+            <p className="py-8 text-center text-sm text-slate-400">
               Loading...
             </p>
           ) : selectedEvents.length === 0 ? (
-            <p className="py-4 text-center text-sm text-gray-400">
-              No events this day
-            </p>
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white/50 py-10 text-center">
+              <p className="text-sm text-slate-400">No events this day</p>
+            </div>
           ) : (
-            <ul className="space-y-2">
+            <ul className="space-y-2.5">
               {selectedEvents.map((evt) => (
                 <li
                   key={evt.id}
-                  className="flex items-start justify-between rounded-lg bg-white p-4 shadow-sm"
+                  className="flex items-start justify-between rounded-2xl border border-slate-100 bg-white p-4 shadow-sm border-l-4 border-l-emerald-500"
                 >
                   <div>
-                    <p className="font-semibold text-gray-900">{evt.title}</p>
+                    <p className="font-semibold text-slate-900">{evt.title}</p>
                     {evt.description && (
-                      <p className="mt-0.5 text-sm text-gray-500">
+                      <p className="mt-0.5 text-sm text-slate-500">
                         {evt.description}
                       </p>
                     )}
-                    <p className="mt-1 text-xs text-gray-400" suppressHydrationWarning>
+                    <p className="mt-1.5 text-xs font-medium text-slate-400" suppressHydrationWarning>
                       {new Date(evt.start_date).toLocaleTimeString("en-US", {
                         hour: "numeric",
                         minute: "2-digit",
@@ -284,9 +276,12 @@ export default function CalendarView({ userId }: { userId: string }) {
                   </div>
                   <button
                     onClick={() => handleDelete(evt.id)}
-                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-gray-400 active:bg-red-50 active:text-red-500"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-300 active:bg-red-50 active:text-red-500"
                   >
-                    &times;
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
                   </button>
                 </li>
               ))}
@@ -297,28 +292,36 @@ export default function CalendarView({ userId }: { userId: string }) {
 
       {/* Quick Add Modal */}
       {showQuickAdd && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center">
-          <div className="w-full max-w-lg rounded-t-2xl bg-white p-6 shadow-xl sm:rounded-2xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-bold text-gray-900">Quick Add</h3>
+        <div className="animate-fade-in fixed inset-0 z-50 flex items-end justify-center bg-black/30 backdrop-blur-sm sm:items-center">
+          <div className="animate-slide-up w-full max-w-lg rounded-t-3xl bg-white p-6 shadow-2xl sm:rounded-3xl">
+            {/* Drag handle */}
+            <div className="mb-4 flex justify-center sm:hidden">
+              <div className="h-1 w-10 rounded-full bg-slate-200" />
+            </div>
+
+            <div className="mb-5 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900">Quick Add</h3>
               <button
                 onClick={() => setShowQuickAdd(false)}
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg text-2xl text-gray-400 active:bg-gray-100"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-400 active:bg-slate-100"
               >
-                &times;
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
               </button>
             </div>
 
             {/* Preset buttons */}
-            <div className="mb-4 flex flex-wrap gap-2">
+            <div className="mb-5 flex flex-wrap gap-2">
               {QUICK_ADD_PRESETS.map((preset) => (
                 <button
                   key={preset}
                   onClick={() => setTitle(preset)}
-                  className={`min-h-[44px] rounded-full px-4 text-sm font-medium shadow-sm active:scale-95 ${
+                  className={`min-h-[44px] rounded-2xl px-4 text-sm font-medium active:scale-95 ${
                     title === preset
-                      ? "bg-blue-600 text-white"
-                      : "bg-gray-100 text-gray-700 active:bg-gray-200"
+                      ? "bg-blue-600 text-white shadow-md shadow-blue-500/20"
+                      : "border border-slate-200 bg-slate-50 text-slate-600 active:bg-slate-100"
                   }`}
                 >
                   {preset}
@@ -327,54 +330,44 @@ export default function CalendarView({ userId }: { userId: string }) {
             </div>
 
             <form onSubmit={handleQuickAdd} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Event Title
-                </label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g. Cole's Baseball"
-                  required
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-4 py-3 text-base shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Event title"
+                required
+                className="block w-full rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3.5 text-base text-slate-900 placeholder-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              />
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  Notes (optional)
-                </label>
-                <input
-                  type="text"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="e.g. Bring cleats"
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-4 py-3 text-base shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Notes (optional)"
+                className="block w-full rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3.5 text-base text-slate-900 placeholder-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              />
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">
                     Start
                   </label>
                   <input
                     type="time"
                     value={startTime}
                     onChange={(e) => setStartTime(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-4 py-3 text-base shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="block w-full rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-base focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">
                     End
                   </label>
                   <input
                     type="time"
                     value={endTime}
                     onChange={(e) => setEndTime(e.target.value)}
-                    className="mt-1 block w-full rounded-lg border border-gray-300 px-4 py-3 text-base shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="block w-full rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-base focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                   />
                 </div>
               </div>
@@ -382,7 +375,7 @@ export default function CalendarView({ userId }: { userId: string }) {
               <button
                 type="submit"
                 disabled={saving}
-                className="min-h-[52px] w-full rounded-lg bg-blue-600 text-base font-semibold text-white shadow-sm active:bg-blue-700 disabled:opacity-50"
+                className="min-h-[52px] w-full rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-base font-semibold text-white shadow-lg shadow-blue-500/20 active:scale-[0.98] disabled:opacity-50"
               >
                 {saving ? "Saving..." : "Add Event"}
               </button>

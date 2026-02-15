@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import Link from "next/link";
+import DashboardView from "./dashboard-view";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -10,51 +10,46 @@ export default async function Home() {
     redirect("/login");
   }
 
+  // Extract first name from email
+  const rawName = user.email?.split("@")[0] ?? "there";
+  const firstName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+
+  // Fetch today's events
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const todayStr = `${y}-${m}-${d}`;
+
+  const { data: todayEvents } = await supabase
+    .from("events")
+    .select("*")
+    .gte("start_date", `${todayStr}T00:00:00`)
+    .lte("start_date", `${todayStr}T23:59:59`)
+    .order("start_date", { ascending: true });
+
+  // Fetch this month's spending total
+  const startOfMonth = `${y}-${m}-01`;
+  const daysInMonth = new Date(y, now.getMonth() + 1, 0).getDate();
+  const endOfMonth = `${y}-${m}-${String(daysInMonth).padStart(2, "0")}`;
+
+  const { data: monthExpenses } = await supabase
+    .from("expenses")
+    .select("amount")
+    .gte("date", startOfMonth)
+    .lte("date", endOfMonth);
+
+  const monthTotal = (monthExpenses ?? []).reduce(
+    (sum, e) => sum + Number(e.amount),
+    0
+  );
+
   return (
-    <div className="flex min-h-screen flex-col items-center bg-gray-50 px-4 py-12">
-      <main className="w-full max-w-2xl">
-        <h1 className="mb-2 text-3xl font-bold text-gray-900">
-          Henderson Family Hub
-        </h1>
-        <p className="mb-8 text-gray-600">
-          Welcome, {user.email}
-        </p>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Link
-            href="/budget"
-            className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md"
-          >
-            <h2 className="mb-2 text-xl font-semibold text-gray-900">
-              Budget
-            </h2>
-            <p className="text-sm text-gray-600">
-              Track family expenses and manage your budget.
-            </p>
-          </Link>
-
-          <Link
-            href="/calendar"
-            className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md"
-          >
-            <h2 className="mb-2 text-xl font-semibold text-gray-900">
-              Calendar
-            </h2>
-            <p className="text-sm text-gray-600">
-              View and manage family events and schedules.
-            </p>
-          </Link>
-        </div>
-
-        <form action="/auth/signout" method="post" className="mt-8">
-          <button
-            type="submit"
-            className="text-sm text-gray-500 hover:text-gray-700"
-          >
-            Sign Out
-          </button>
-        </form>
-      </main>
-    </div>
+    <DashboardView
+      firstName={firstName}
+      todayEvents={todayEvents ?? []}
+      monthTotal={monthTotal}
+      userId={user.id}
+    />
   );
 }
