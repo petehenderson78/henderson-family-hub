@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import type { Event, CalendarFeed, ExternalEvent } from "@/lib/types";
+import GmailScan from "./gmail-scan";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -249,6 +250,7 @@ export default function CalendarView({ userId }: { userId: string }) {
             {formatMonthYear(currentYear, currentMonth)}
           </h2>
           <div className="flex items-center gap-2">
+            <GmailScan userId={userId} onEventsAdded={() => fetchEvents()} />
             <Link
               href="/calendar/feeds"
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm active:scale-95 active:bg-slate-50"

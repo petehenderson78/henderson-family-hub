@@ -43,3 +43,13 @@ export interface ExternalEvent {
   sourceColor: string;
   is_external: true;
 }
+
+export interface DiscoveredEvent {
+  id: string;
+  title: string;
+  description: string | null;
+  location: string | null;
+  start_date: string;
+  end_date: string;
+  source_email: string;
+}

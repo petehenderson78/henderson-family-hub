@@ -8,8 +8,21 @@ export async function GET(request: Request) {
 
   if (code) {
     const supabase = await createClient();
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
+      // If this was a Google OAuth flow with a refresh token, save it for Gmail access
+      const session = data?.session;
+      if (session?.provider_refresh_token) {
+        await supabase.from("gmail_connections").upsert(
+          {
+            user_id: session.user.id,
+            google_refresh_token: session.provider_refresh_token,
+            google_email: session.user.email,
+          },
+          { onConflict: "user_id" }
+        );
+      }
+
       return NextResponse.redirect(`${origin}${next}`);
     }
   }
