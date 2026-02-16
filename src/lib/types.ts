@@ -36,6 +36,7 @@ export interface ExternalEvent {
   id: string;
   title: string;
   description: string | null;
+  location: string | null;
   start_date: string;
   end_date: string;
   source: string;

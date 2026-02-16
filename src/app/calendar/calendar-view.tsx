@@ -109,7 +109,7 @@ export default function CalendarView({ userId }: { userId: string }) {
               if (!res.ok) return [];
               const data = await res.json();
               return (data.events ?? []).map(
-                (evt: { id: string; title: string; description: string | null; start_date: string; end_date: string }) => ({
+                (evt: { id: string; title: string; description: string | null; location: string | null; start_date: string; end_date: string }) => ({
                   ...evt,
                   source: feed.name,
                   sourceColor: feed.color,
@@ -392,10 +392,25 @@ export default function CalendarView({ userId }: { userId: string }) {
                           </span>
                         )}
                       </div>
-                      {evt.description && (
+                      {evt.description &&
+                        !(isExternal && (evt as ExternalEvent).location && evt.description === (evt as ExternalEvent).location) && (
                         <p className="mt-0.5 text-sm text-slate-500 line-clamp-2">
                           {evt.description}
                         </p>
+                      )}
+                      {isExternal && (evt as ExternalEvent).location && (
+                        <a
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((evt as ExternalEvent).location!)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-1 flex items-center gap-1 text-xs text-blue-600"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                            <circle cx="12" cy="10" r="3" />
+                          </svg>
+                          <span className="truncate">{(evt as ExternalEvent).location}</span>
+                        </a>
                       )}
                       <p className="mt-1.5 text-xs font-medium text-slate-400" suppressHydrationWarning>
                         {new Date(evt.start_date).toLocaleTimeString("en-US", {

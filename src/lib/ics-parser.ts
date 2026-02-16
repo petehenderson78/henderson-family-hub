@@ -2,6 +2,7 @@ interface ParsedEvent {
   id: string;
   title: string;
   description: string | null;
+  location: string | null;
   start_date: string;
   end_date: string;
 }
@@ -84,6 +85,25 @@ function unescapeICSText(text: string): string {
     .replace(/\\\\/g, "\\");
 }
 
+function cleanTitle(raw: string): string {
+  return raw.replace(/^(Game|Practice|Event|Other|Cancelled):\s*/i, "");
+}
+
+function cleanDescription(raw: string, location: string | null): string {
+  return raw
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return false;
+      if (/^https?:\/\//i.test(trimmed)) return false;
+      if (/powered by teamsnap/i.test(trimmed)) return false;
+      if (location && trimmed === location.trim()) return false;
+      return true;
+    })
+    .join("\n")
+    .trim();
+}
+
 export function parseICS(icsContent: string): ParsedEvent[] {
   const lines = unfoldLines(icsContent);
   const events: ParsedEvent[] = [];
@@ -133,22 +153,24 @@ export function parseICS(icsContent: string): ParsedEvent[] {
         endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
       }
 
+      const location = eventProps["LOCATION"]?.value
+        ? unescapeICSText(eventProps["LOCATION"].value).trim() || null
+        : null;
+
       let description: string | null = null;
-      const descParts: string[] = [];
       if (eventProps["DESCRIPTION"]?.value) {
-        descParts.push(unescapeICSText(eventProps["DESCRIPTION"].value));
-      }
-      if (eventProps["LOCATION"]?.value) {
-        descParts.push(`📍 ${unescapeICSText(eventProps["LOCATION"].value)}`);
-      }
-      if (descParts.length > 0) {
-        description = descParts.join("\n");
+        const cleaned = cleanDescription(
+          unescapeICSText(eventProps["DESCRIPTION"].value),
+          location
+        );
+        description = cleaned || null;
       }
 
       events.push({
         id: uid,
-        title: unescapeICSText(summary),
+        title: cleanTitle(unescapeICSText(summary)),
         description,
+        location,
         start_date: startDate.toISOString(),
         end_date: endDate.toISOString(),
       });
