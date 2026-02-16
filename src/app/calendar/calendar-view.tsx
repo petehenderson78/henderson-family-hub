@@ -2,7 +2,8 @@
 
 import { createClient } from "@/lib/supabase/client";
 import { useEffect, useState, useCallback } from "react";
-import type { Event } from "@/lib/types";
+import Link from "next/link";
+import type { Event, CalendarFeed, ExternalEvent } from "@/lib/types";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -47,6 +48,11 @@ export default function CalendarView({ userId }: { userId: string }) {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // External feed state
+  const [feeds, setFeeds] = useState<CalendarFeed[]>([]);
+  const [externalEvents, setExternalEvents] = useState<ExternalEvent[]>([]);
+  const [feedsLoading, setFeedsLoading] = useState(false);
+
   useEffect(() => {
     setTodayStr(toLocalDateString(new Date()));
     setMounted(true);
@@ -76,9 +82,62 @@ export default function CalendarView({ userId }: { userId: string }) {
     setLoading(false);
   }, [currentYear, currentMonth, supabase]);
 
+  const fetchFeeds = useCallback(async () => {
+    const { data } = await supabase
+      .from("calendar_feeds")
+      .select("*")
+      .order("created_at", { ascending: true });
+    setFeeds(data ?? []);
+    return data ?? [];
+  }, [supabase]);
+
+  const syncFeeds = useCallback(
+    async (feedList: CalendarFeed[]) => {
+      if (feedList.length === 0) {
+        setExternalEvents([]);
+        return;
+      }
+      setFeedsLoading(true);
+
+      try {
+        const results = await Promise.all(
+          feedList.map(async (feed) => {
+            try {
+              const res = await fetch(
+                `/api/calendar/feeds/sync?url=${encodeURIComponent(feed.url)}`
+              );
+              if (!res.ok) return [];
+              const data = await res.json();
+              return (data.events ?? []).map(
+                (evt: { id: string; title: string; description: string | null; start_date: string; end_date: string }) => ({
+                  ...evt,
+                  source: feed.name,
+                  sourceColor: feed.color,
+                  is_external: true as const,
+                })
+              );
+            } catch {
+              return [];
+            }
+          })
+        );
+
+        setExternalEvents(results.flat());
+      } catch {
+        setExternalEvents([]);
+      }
+      setFeedsLoading(false);
+    },
+    []
+  );
+
   useEffect(() => {
     fetchEvents();
   }, [fetchEvents]);
+
+  useEffect(() => {
+    fetchFeeds().then((feedList) => syncFeeds(feedList));
+  }, [fetchFeeds, syncFeeds, currentYear, currentMonth]);
 
   function prevMonth() {
     if (currentMonth === 0) {
@@ -99,10 +158,36 @@ export default function CalendarView({ userId }: { userId: string }) {
   }
 
   function eventsForDate(dateStr: string) {
-    return events.filter((e) => {
+    const localEvents = events.filter((e) => {
       const local = new Date(e.start_date);
       return toLocalDateString(local) === dateStr;
     });
+
+    const extEvents = externalEvents.filter((e) => {
+      const local = new Date(e.start_date);
+      return toLocalDateString(local) === dateStr;
+    });
+
+    // Combine and sort by start_date
+    const all = [
+      ...localEvents.map((e) => ({ ...e, is_external: false as const })),
+      ...extEvents,
+    ].sort(
+      (a, b) =>
+        new Date(a.start_date).getTime() - new Date(b.start_date).getTime()
+    );
+
+    return all;
+  }
+
+  function dateHasLocalEvents(dateStr: string) {
+    return events.some((e) => toLocalDateString(new Date(e.start_date)) === dateStr);
+  }
+
+  function dateHasExternalEvents(dateStr: string) {
+    return externalEvents.some(
+      (e) => toLocalDateString(new Date(e.start_date)) === dateStr
+    );
   }
 
   async function handleQuickAdd(e: React.FormEvent) {
@@ -163,14 +248,26 @@ export default function CalendarView({ userId }: { userId: string }) {
           <h2 className="text-lg font-bold tracking-tight text-slate-900" suppressHydrationWarning>
             {formatMonthYear(currentYear, currentMonth)}
           </h2>
-          <button
-            onClick={nextMonth}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm active:scale-95 active:bg-slate-50"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="9 6 15 12 9 18" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/calendar/feeds"
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm active:scale-95 active:bg-slate-50"
+              title="Manage calendar feeds"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </Link>
+            <button
+              onClick={nextMonth}
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm active:scale-95 active:bg-slate-50"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Calendar card */}
@@ -192,7 +289,8 @@ export default function CalendarView({ userId }: { userId: string }) {
               const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
               const isToday = mounted && dateStr === todayStr;
               const isSelected = dateStr === selectedDate;
-              const dayEvents = eventsForDate(dateStr);
+              const hasLocal = dateHasLocalEvents(dateStr);
+              const hasExternal = dateHasExternalEvents(dateStr);
 
               return (
                 <button
@@ -207,12 +305,23 @@ export default function CalendarView({ userId }: { userId: string }) {
                   }`}
                 >
                   {day}
-                  {dayEvents.length > 0 && (
-                    <span
-                      className={`absolute bottom-1.5 h-1 w-1 rounded-full ${
-                        isSelected ? "bg-white" : "bg-emerald-500"
-                      }`}
-                    />
+                  {(hasLocal || hasExternal) && (
+                    <span className="absolute bottom-1.5 flex gap-0.5">
+                      {hasLocal && (
+                        <span
+                          className={`h-1 w-1 rounded-full ${
+                            isSelected ? "bg-white" : "bg-emerald-500"
+                          }`}
+                        />
+                      )}
+                      {hasExternal && (
+                        <span
+                          className={`h-1 w-1 rounded-full ${
+                            isSelected ? "bg-white/70" : "bg-violet-500"
+                          }`}
+                        />
+                      )}
+                    </span>
                   )}
                 </button>
               );
@@ -243,7 +352,7 @@ export default function CalendarView({ userId }: { userId: string }) {
             </button>
           </div>
 
-          {loading ? (
+          {loading || feedsLoading ? (
             <p className="py-8 text-center text-sm text-slate-400">
               Loading...
             </p>
@@ -253,41 +362,67 @@ export default function CalendarView({ userId }: { userId: string }) {
             </div>
           ) : (
             <ul className="space-y-2.5">
-              {selectedEvents.map((evt) => (
-                <li
-                  key={evt.id}
-                  className="flex items-start justify-between rounded-2xl border border-slate-100 bg-white p-4 shadow-sm border-l-4 border-l-emerald-500"
-                >
-                  <div>
-                    <p className="font-semibold text-slate-900">{evt.title}</p>
-                    {evt.description && (
-                      <p className="mt-0.5 text-sm text-slate-500">
-                        {evt.description}
-                      </p>
-                    )}
-                    <p className="mt-1.5 text-xs font-medium text-slate-400" suppressHydrationWarning>
-                      {new Date(evt.start_date).toLocaleTimeString("en-US", {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}{" "}
-                      &ndash;{" "}
-                      {new Date(evt.end_date).toLocaleTimeString("en-US", {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => handleDelete(evt.id)}
-                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-300 active:bg-red-50 active:text-red-500"
+              {selectedEvents.map((evt) => {
+                const isExternal = "is_external" in evt && evt.is_external;
+                const borderColor = isExternal
+                  ? (evt as ExternalEvent).sourceColor
+                  : undefined;
+
+                return (
+                  <li
+                    key={`${isExternal ? "ext" : "loc"}-${evt.id}`}
+                    className={`flex items-start justify-between rounded-2xl border border-slate-100 bg-white p-4 shadow-sm border-l-4 ${
+                      isExternal ? "" : "border-l-emerald-500"
+                    }`}
+                    style={isExternal ? { borderLeftColor: borderColor } : undefined}
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    </svg>
-                  </button>
-                </li>
-              ))}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-slate-900 truncate">
+                          {evt.title}
+                        </p>
+                        {isExternal && (
+                          <span
+                            className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold text-white"
+                            style={{
+                              backgroundColor: (evt as ExternalEvent).sourceColor,
+                            }}
+                          >
+                            {(evt as ExternalEvent).source}
+                          </span>
+                        )}
+                      </div>
+                      {evt.description && (
+                        <p className="mt-0.5 text-sm text-slate-500 line-clamp-2">
+                          {evt.description}
+                        </p>
+                      )}
+                      <p className="mt-1.5 text-xs font-medium text-slate-400" suppressHydrationWarning>
+                        {new Date(evt.start_date).toLocaleTimeString("en-US", {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}{" "}
+                        &ndash;{" "}
+                        {new Date(evt.end_date).toLocaleTimeString("en-US", {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                    {!isExternal && (
+                      <button
+                        onClick={() => handleDelete(evt.id)}
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-300 active:bg-red-50 active:text-red-500"
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
