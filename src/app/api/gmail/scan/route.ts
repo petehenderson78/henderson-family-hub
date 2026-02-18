@@ -28,9 +28,17 @@ export async function POST() {
       );
     }
 
-    if (message === "token_expired") {
+    if (message === "token_is_access_token") {
       return NextResponse.json(
-        { error: "token_expired", detail: "Gmail token expired or invalid. Please reconnect." },
+        { error: "token_is_access_token", detail: "Saved token is an access token, not a refresh token. Please disconnect and reconnect Gmail." },
+        { status: 401 }
+      );
+    }
+
+    if (message.startsWith("token_expired:")) {
+      const googleError = message.slice("token_expired:".length);
+      return NextResponse.json(
+        { error: "token_expired", detail: `Token refresh failed: ${googleError}` },
         { status: 401 }
       );
     }

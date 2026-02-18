@@ -13,13 +13,20 @@ export async function GET() {
 
   const { data } = await supabase
     .from("gmail_connections")
-    .select("google_email")
+    .select("google_email, google_refresh_token")
     .eq("user_id", user.id)
     .single();
 
   return NextResponse.json({
     connected: !!data,
     email: data?.google_email ?? null,
+    token_type: data?.google_refresh_token
+      ? data.google_refresh_token.startsWith("1//")
+        ? "refresh_token"
+        : data.google_refresh_token.startsWith("ya29.")
+          ? "access_token_wrong"
+          : "unknown_format"
+      : null,
   });
 }
 

@@ -23,13 +23,21 @@ export async function getGmailClient(userId: string) {
     throw new Error("no_connection");
   }
 
-  oauth2Client.setCredentials({ refresh_token: data.google_refresh_token });
+  const token = data.google_refresh_token;
+
+  // A Google refresh token starts with "1//" — if it looks like an access token ("ya29."), it won't work
+  if (token.startsWith("ya29.")) {
+    throw new Error("token_is_access_token");
+  }
+
+  oauth2Client.setCredentials({ refresh_token: token });
 
   try {
     const { credentials } = await oauth2Client.refreshAccessToken();
     oauth2Client.setCredentials(credentials);
-  } catch {
-    throw new Error("token_expired");
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`token_expired:${detail}`);
   }
 
   return google.gmail({ version: "v1", auth: oauth2Client });
