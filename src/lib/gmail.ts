@@ -53,7 +53,7 @@ export async function searchEmails(
   gmailClient: ReturnType<typeof google.gmail>
 ) {
   const query =
-    "newer_than:30d (from:*.edu OR subject:(school OR field trip OR conference OR practice OR game OR picture day OR report card))";
+    "newer_than:60d (from:*.edu OR from:*k12* OR from:*middletownk12.org OR from:*school* OR subject:(school OR field trip OR conference OR practice OR game OR picture day OR report card OR permission OR dismissal OR PTA OR spirit OR schedule OR homework OR reminder))";
 
   const listRes = await gmailClient.users.messages.list({
     userId: "me",
