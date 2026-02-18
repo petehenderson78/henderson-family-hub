@@ -22,11 +22,11 @@ export default function GmailScan({
   const [showPrompt, setShowPrompt] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
 
+  // Check connection status on mount
   useEffect(() => {
     let cancelled = false;
 
-    async function init() {
-      // Check connection status
+    async function checkStatus() {
       try {
         const res = await fetch("/api/gmail/connect");
         if (!cancelled && res.ok) {
@@ -36,14 +36,22 @@ export default function GmailScan({
       } catch {
         // ignore
       }
+      if (!cancelled) setChecking(false);
+    }
 
-      // Check if we just came back from OAuth with a refresh token
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!cancelled && session?.provider_refresh_token) {
-          await fetch("/api/gmail/connect", {
+    checkStatus();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Listen for auth state changes to capture provider_refresh_token after OAuth redirect
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (
+          (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") &&
+          session?.provider_refresh_token
+        ) {
+          const res = await fetch("/api/gmail/connect", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -51,17 +59,12 @@ export default function GmailScan({
               email: session.user?.email,
             }),
           });
-          if (!cancelled) setConnected(true);
+          if (res.ok) setConnected(true);
         }
-      } catch {
-        // ignore
       }
+    );
 
-      if (!cancelled) setChecking(false);
-    }
-
-    init();
-    return () => { cancelled = true; };
+    return () => subscription.unsubscribe();
   }, [supabase]);
 
   async function handleConnect() {
@@ -88,12 +91,10 @@ export default function GmailScan({
       const data = await res.json();
 
       if (!res.ok) {
-        if (data.error === "reconnect") {
+        if (data.error === "no_connection" || data.error === "token_expired") {
           setConnected(false);
-          setScanError("Gmail connection expired. Please reconnect.");
-          return;
         }
-        setScanError("Failed to scan emails. Please try again.");
+        setScanError(data.detail || "Failed to scan emails. Please try again.");
         return;
       }
 

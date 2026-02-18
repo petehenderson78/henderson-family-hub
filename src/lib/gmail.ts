@@ -2,12 +2,16 @@ import { google } from "googleapis";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@/lib/supabase/server";
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET
-);
-
 export async function getGmailClient(userId: string) {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    throw new Error("missing_credentials");
+  }
+
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  );
+
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("gmail_connections")

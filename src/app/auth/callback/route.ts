@@ -13,17 +13,27 @@ export async function GET(request: Request) {
       // If this was a Google OAuth flow with a refresh token, save it for Gmail access
       const session = data?.session;
       if (session?.provider_refresh_token) {
-        await supabase.from("gmail_connections").upsert(
-          {
-            user_id: session.user.id,
-            google_refresh_token: session.provider_refresh_token,
-            google_email: session.user.email,
-          },
-          { onConflict: "user_id" }
-        );
+        const { error: upsertError } = await supabase
+          .from("gmail_connections")
+          .upsert(
+            {
+              user_id: session.user.id,
+              google_refresh_token: session.provider_refresh_token,
+              google_email: session.user.email,
+            },
+            { onConflict: "user_id" }
+          );
+        if (upsertError) {
+          console.error("Failed to save Gmail refresh token:", upsertError);
+        }
       }
 
-      return NextResponse.redirect(`${origin}${next}`);
+      // Pass a flag so the client knows to check for provider tokens
+      const redirectUrl = new URL(`${origin}${next}`);
+      if (session?.provider_refresh_token) {
+        redirectUrl.searchParams.set("gmail_connected", "1");
+      }
+      return NextResponse.redirect(redirectUrl.toString());
     }
   }
 
