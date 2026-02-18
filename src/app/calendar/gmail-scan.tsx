@@ -22,42 +22,46 @@ export default function GmailScan({
   const [showPrompt, setShowPrompt] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
 
-  const checkConnection = useCallback(async () => {
-    try {
-      const res = await fetch("/api/gmail/connect");
-      if (res.ok) {
-        const data = await res.json();
-        setConnected(data.connected);
-      }
-    } catch {
-      // ignore
-    }
-    setChecking(false);
-  }, []);
-
   useEffect(() => {
-    checkConnection();
-  }, [checkConnection]);
+    let cancelled = false;
 
-  // After OAuth redirect, check for provider_refresh_token in session
-  useEffect(() => {
-    async function saveTokenIfPresent() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (session?.provider_refresh_token) {
-        await fetch("/api/gmail/connect", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            refresh_token: session.provider_refresh_token,
-            email: session.user?.email,
-          }),
-        });
-        setConnected(true);
+    async function init() {
+      // Check connection status
+      try {
+        const res = await fetch("/api/gmail/connect");
+        if (!cancelled && res.ok) {
+          const data = await res.json();
+          setConnected(data.connected);
+        }
+      } catch {
+        // ignore
       }
+
+      // Check if we just came back from OAuth with a refresh token
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!cancelled && session?.provider_refresh_token) {
+          await fetch("/api/gmail/connect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              refresh_token: session.provider_refresh_token,
+              email: session.user?.email,
+            }),
+          });
+          if (!cancelled) setConnected(true);
+        }
+      } catch {
+        // ignore
+      }
+
+      if (!cancelled) setChecking(false);
     }
-    saveTokenIfPresent();
+
+    init();
+    return () => { cancelled = true; };
   }, [supabase]);
 
   async function handleConnect() {
