@@ -34,7 +34,15 @@ export async function POST() {
     });
 
     return NextResponse.json({ link_token: response.data.link_token });
-  } catch (err) {
+  } catch (err: unknown) {
+    const plaidErr = err as { response?: { data?: { error_message?: string; error_code?: string } } };
+    const detail = plaidErr?.response?.data;
+    if (detail?.error_message) {
+      return NextResponse.json(
+        { error: `${detail.error_code}: ${detail.error_message}` },
+        { status: 500 }
+      );
+    }
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
   }
