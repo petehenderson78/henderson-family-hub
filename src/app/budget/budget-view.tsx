@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/client";
 import { useEffect, useState, useCallback } from "react";
 import type { Expense } from "@/lib/types";
+import LinkBankAccount from "./link-bank-account";
 
 const CATEGORIES = [
   "Groceries",
@@ -267,6 +268,11 @@ export default function BudgetView({ userId }: { userId: string }) {
             </ul>
           </div>
         )}
+
+        {/* Linked bank accounts */}
+        <div className="mb-4">
+          <LinkBankAccount />
+        </div>
 
         {/* Add Expense button + expense list */}
         <div className="mb-4 flex items-center justify-between">
