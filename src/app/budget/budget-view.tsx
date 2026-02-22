@@ -83,6 +83,10 @@ export default function BudgetView({ userId }: { userId: string }) {
   // Auto-apply guard
   const autoApplyRan = useRef(false);
 
+  // Plaid sync guard
+  const plaidSyncRan = useRef(false);
+  const [syncing, setSyncing] = useState(false);
+
   useEffect(() => {
     setMounted(true);
   }, []);
@@ -209,6 +213,29 @@ export default function BudgetView({ userId }: { userId: string }) {
     }
   }, [supabase]);
 
+  const syncPlaidTransactions = useCallback(async () => {
+    if (plaidSyncRan.current) return;
+    plaidSyncRan.current = true;
+
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/plaid/sync-transactions", {
+        method: "POST",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.added > 0 || data.modified > 0 || data.removed > 0) {
+          fetchExpenses();
+          fetchTrends();
+        }
+      }
+    } catch {
+      // sync is best-effort
+    } finally {
+      setSyncing(false);
+    }
+  }, [fetchExpenses, fetchTrends]);
+
   useEffect(() => {
     fetchExpenses();
   }, [fetchExpenses]);
@@ -219,12 +246,13 @@ export default function BudgetView({ userId }: { userId: string }) {
     fetchTrends();
   }, [fetchRecurringExpenses, fetchBudgetGoals, fetchTrends]);
 
-  // Auto-apply on mount, then refresh expenses
+  // Auto-apply on mount, then sync Plaid transactions
   useEffect(() => {
     autoApplyRecurring().then(() => {
       fetchExpenses();
+      syncPlaidTransactions();
     });
-  }, [autoApplyRecurring, fetchExpenses]);
+  }, [autoApplyRecurring, fetchExpenses, syncPlaidTransactions]);
 
   function prevMonth() {
     if (currentMonth === 0) {
@@ -317,6 +345,17 @@ export default function BudgetView({ userId }: { userId: string }) {
             </svg>
           </button>
         </div>
+
+        {/* Plaid sync indicator */}
+        {syncing && (
+          <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border border-blue-100 bg-blue-50 py-3 text-sm font-medium text-blue-700">
+            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Syncing bank transactions...
+          </div>
+        )}
 
         {/* 6-Month Trends (collapsible) */}
         {trends.length > 0 && (
@@ -530,6 +569,11 @@ export default function BudgetView({ userId }: { userId: string }) {
                     >
                       {exp.category}
                     </span>
+                    {exp.plaid_transaction_id && (
+                      <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600">
+                        Bank
+                      </span>
+                    )}
                   </div>
                   {exp.description && (
                     <p className="mt-1 text-sm text-slate-500">

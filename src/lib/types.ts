@@ -6,6 +6,7 @@ export interface Expense {
   description: string | null;
   date: string;
   created_at: string;
+  plaid_transaction_id: string | null;
 }
 
 export interface Event {
