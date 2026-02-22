@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import type { Event } from "@/lib/types";
+import { createClient } from "@/lib/supabase/client";
+import type { Event, ExternalEvent } from "@/lib/types";
 
 interface DashboardViewProps {
   firstName: string;
@@ -25,25 +26,77 @@ function getGreeting() {
   return "Good evening";
 }
 
+function toLocalDateStr(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 export default function DashboardView({
   firstName,
   todayEvents,
   monthTotal,
 }: DashboardViewProps) {
+  const supabase = createClient();
   const [mounted, setMounted] = useState(false);
+  const [externalEvents, setExternalEvents] = useState<ExternalEvent[]>([]);
+
+  const syncFeeds = useCallback(async () => {
+    const { data: feeds } = await supabase
+      .from("calendar_feeds")
+      .select("*")
+      .order("created_at", { ascending: true });
+
+    if (!feeds || feeds.length === 0) return;
+
+    try {
+      const results = await Promise.all(
+        feeds.map(async (feed) => {
+          try {
+            const res = await fetch(
+              `/api/calendar/feeds/sync?url=${encodeURIComponent(feed.url)}`
+            );
+            if (!res.ok) return [];
+            const data = await res.json();
+            return (data.events ?? []).map(
+              (evt: { id: string; title: string; description: string | null; location: string | null; start_date: string; end_date: string }) => ({
+                ...evt,
+                source: feed.name,
+                sourceColor: feed.color,
+                is_external: true as const,
+              })
+            );
+          } catch {
+            return [];
+          }
+        })
+      );
+      setExternalEvents(results.flat());
+    } catch {
+      // best-effort
+    }
+  }, [supabase]);
 
   useEffect(() => {
     setMounted(true);
-  }, []);
+    syncFeeds();
+  }, [syncFeeds]);
 
   // Filter to only events that are actually today in the user's local timezone
-  const localToday = new Date();
-  const todayStr = `${localToday.getFullYear()}-${String(localToday.getMonth() + 1).padStart(2, "0")}-${String(localToday.getDate()).padStart(2, "0")}`;
-  const filteredEvents = todayEvents.filter((evt) => {
-    const d = new Date(evt.start_date);
-    const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    return localDate === todayStr;
+  const todayStr = toLocalDateStr(new Date());
+
+  const filteredDbEvents = todayEvents.filter((evt) => {
+    return toLocalDateStr(new Date(evt.start_date)) === todayStr;
   });
+
+  const filteredExtEvents = externalEvents.filter((evt) => {
+    return toLocalDateStr(new Date(evt.start_date)) === todayStr;
+  });
+
+  const allTodayEvents = [
+    ...filteredDbEvents.map((e) => ({ ...e, is_external: false as const })),
+    ...filteredExtEvents,
+  ].sort(
+    (a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()
+  );
 
   return (
     <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
@@ -75,7 +128,7 @@ export default function DashboardView({
             </div>
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Today</p>
             <p className="mt-1 text-3xl font-bold text-slate-900">
-              {filteredEvents.length}
+              {allTodayEvents.length}
             </p>
             <p className="mt-0.5 text-xs text-slate-400">events</p>
           </div>
@@ -99,31 +152,45 @@ export default function DashboardView({
           <h2 className="mb-4 text-lg font-bold tracking-tight text-slate-900">
             Today&apos;s Schedule
           </h2>
-          {filteredEvents.length === 0 ? (
+          {allTodayEvents.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white/50 py-10 text-center">
               <p className="text-sm text-slate-400">No events today</p>
             </div>
           ) : (
             <ul className="space-y-2.5">
-              {filteredEvents.map((evt) => (
-                <li
-                  key={evt.id}
-                  className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm border-l-4 border-l-emerald-500"
-                >
-                  <p className="font-semibold text-slate-900">{evt.title}</p>
-                  <p className="mt-1 text-xs font-medium text-slate-400" suppressHydrationWarning>
-                    {mounted
-                      ? `${new Date(evt.start_date).toLocaleTimeString("en-US", {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })} – ${new Date(evt.end_date).toLocaleTimeString("en-US", {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}`
-                      : "\u00A0"}
-                  </p>
-                </li>
-              ))}
+              {allTodayEvents.map((evt) => {
+                const isExt = "is_external" in evt && evt.is_external;
+                return (
+                  <li
+                    key={`${isExt ? "ext" : "loc"}-${evt.id}`}
+                    className={`rounded-2xl border border-slate-100 bg-white p-4 shadow-sm border-l-4 ${isExt ? "" : "border-l-emerald-500"}`}
+                    style={isExt ? { borderLeftColor: (evt as ExternalEvent).sourceColor } : undefined}
+                  >
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-slate-900 truncate">{evt.title}</p>
+                      {isExt && (
+                        <span
+                          className="flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold text-white"
+                          style={{ backgroundColor: (evt as ExternalEvent).sourceColor }}
+                        >
+                          {(evt as ExternalEvent).source}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs font-medium text-slate-400" suppressHydrationWarning>
+                      {mounted
+                        ? `${new Date(evt.start_date).toLocaleTimeString("en-US", {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })} – ${new Date(evt.end_date).toLocaleTimeString("en-US", {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}`
+                        : "\u00A0"}
+                    </p>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
