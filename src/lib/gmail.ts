@@ -106,6 +106,38 @@ export async function searchEmails(
   return emails;
 }
 
+/**
+ * Convert local date/time in a specific IANA timezone to a UTC Date.
+ */
+function tzToUtc(
+  year: number, month: number, day: number,
+  hour: number, minute: number, second: number,
+  tz: string
+): Date {
+  const utcMs = Date.UTC(year, month, day, hour, minute, second);
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const parts = fmt.formatToParts(new Date(utcMs));
+    const p = (type: string) =>
+      parseInt(parts.find((x) => x.type === type)?.value ?? "0");
+    let h = p("hour");
+    if (h === 24) h = 0;
+    const tzMs = Date.UTC(p("year"), p("month") - 1, p("day"), h, p("minute"), p("second"));
+    return new Date(utcMs - (tzMs - utcMs));
+  } catch {
+    return new Date(utcMs);
+  }
+}
+
 export async function extractEvents(emails: EmailMessage[]) {
   if (emails.length === 0) return [];
 
@@ -128,7 +160,7 @@ export async function extractEvents(emails: EmailMessage[]) {
         role: "user",
         content: `You are extracting calendar events from school/teacher emails for a family calendar.
 
-Today's date is ${today}. Extract any upcoming events (field trips, parent-teacher conferences, games, practices, picture days, school events, etc.).
+Today's date is ${today}. Extract any upcoming events (field trips, parent-teacher conferences, games, practices, picture days, school events, virtual author visits, assemblies, etc.).
 
 For each event, return a JSON object with these fields:
 - title: string (concise event name)
@@ -138,6 +170,8 @@ For each event, return a JSON object with these fields:
 - location: string | null
 - description: string | null (brief summary)
 - emailSubject: string (the subject line of the source email)
+
+IMPORTANT: Look very carefully for times. Search the entire email body for any time references such as "10:00 AM", "2pm", "at noon", "from 9-10", "begins at 1:30", etc. Even if the time appears deep in the email body or in a different paragraph from the event title, extract it. Times are critical — always provide startTime and endTime when any time reference exists. All times are in Eastern Time (ET).
 
 Return ONLY a JSON array. If no events are found, return [].
 Do not include events that have already passed.
@@ -180,20 +214,17 @@ ${emailText}`,
   return parsed
     .filter((e) => e.title && e.date)
     .map((e) => {
-      const startDate = e.startTime
-        ? `${e.date}T${e.startTime}:00`
-        : `${e.date}T09:00:00`;
-      const endDate = e.endTime
-        ? `${e.date}T${e.endTime}:00`
-        : `${e.date}T10:00:00`;
+      const [sy, smo, sd] = e.date!.split("-").map(Number);
+      const [sh, smi] = e.startTime ? e.startTime.split(":").map(Number) : [9, 0];
+      const [eh, emi] = e.endTime ? e.endTime.split(":").map(Number) : [sh + 1, smi];
 
       return {
         id: crypto.randomUUID(),
         title: e.title!,
         description: e.description ?? null,
         location: e.location ?? null,
-        start_date: new Date(startDate).toISOString(),
-        end_date: new Date(endDate).toISOString(),
+        start_date: tzToUtc(sy, smo - 1, sd, sh, smi, 0, "America/New_York").toISOString(),
+        end_date: tzToUtc(sy, smo - 1, sd, eh, emi, 0, "America/New_York").toISOString(),
         source_email: e.emailSubject ?? "(unknown)",
       };
     });
