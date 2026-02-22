@@ -52,13 +52,22 @@ interface EmailMessage {
 export async function searchEmails(
   gmailClient: ReturnType<typeof google.gmail>
 ) {
-  const query =
-    "newer_than:60d (from:*.edu OR from:*k12* OR from:*middletownk12.org OR from:*school* OR subject:(school OR field trip OR conference OR practice OR game OR picture day OR report card OR permission OR dismissal OR PTA OR spirit OR schedule OR homework OR reminder))";
+  const query = [
+    "newer_than:60d (",
+    "from:*.edu OR from:*k12* OR from:*middletownk12.org OR from:*school*",
+    "OR from:*booking.com* OR from:*airbnb* OR from:*vrbo* OR from:*hotels.com* OR from:*marriott* OR from:*hilton* OR from:*hyatt*",
+    "OR from:*delta* OR from:*united* OR from:*american* OR from:*southwest* OR from:*jetblue* OR from:*spirit* OR from:*frontier*",
+    "OR from:*opentable* OR from:*resy* OR from:*yelp*",
+    "OR from:*expedia* OR from:*kayak* OR from:*tripadvisor*",
+    "OR subject:(school OR field trip OR conference OR practice OR game OR picture day OR report card OR permission OR dismissal OR PTA OR spirit OR schedule OR homework OR reminder",
+    "OR reservation OR confirmation OR itinerary OR booking OR check-in OR flight OR hotel OR vacation OR travel)",
+    ")",
+  ].join(" ");
 
   const listRes = await gmailClient.users.messages.list({
     userId: "me",
     q: query,
-    maxResults: 20,
+    maxResults: 30,
   });
 
   const messageIds = listRes.data.messages ?? [];
@@ -158,20 +167,27 @@ export async function extractEvents(emails: EmailMessage[]) {
     messages: [
       {
         role: "user",
-        content: `You are extracting calendar events from school/teacher emails for a family calendar.
+        content: `You are extracting calendar events from emails for a family calendar.
 
-Today's date is ${today}. Extract any upcoming events (field trips, parent-teacher conferences, games, practices, picture days, school events, virtual author visits, assemblies, etc.).
+Today's date is ${today}. Extract any upcoming events, including:
+- School events: field trips, parent-teacher conferences, games, practices, picture days, assemblies, virtual author visits, etc.
+- Travel: flights (departure and arrival), hotel check-in/check-out dates, vacation rental stays, car rental pick-up/drop-off
+- Dining: dinner reservations, restaurant bookings
+- Other bookings: tours, activities, tickets with a confirmed date/time
 
 For each event, return a JSON object with these fields:
-- title: string (concise event name)
-- date: string (YYYY-MM-DD format)
+- title: string (concise event name — include the airline, hotel, restaurant, or venue name when applicable, e.g. "Delta Flight 1234 to LAX" or "Hilton Garden Inn Check-in")
+- date: string (YYYY-MM-DD format — for hotels use the check-in date)
 - startTime: string | null (HH:MM in 24h format, or null if not specified)
 - endTime: string | null (HH:MM in 24h format, or null if not specified)
 - location: string | null
-- description: string | null (brief summary)
+- description: string | null (brief summary — include confirmation numbers, booking references, flight numbers, and other key details found in the email)
 - emailSubject: string (the subject line of the source email)
 
-IMPORTANT: Look very carefully for times. Search the entire email body for any time references such as "10:00 AM", "2pm", "at noon", "from 9-10", "begins at 1:30", etc. Even if the time appears deep in the email body or in a different paragraph from the event title, extract it. Times are critical — always provide startTime and endTime when any time reference exists. All times are in Eastern Time (ET).
+For hotel stays, create TWO events: one for check-in and one for check-out (each with the appropriate date).
+For flights, use the departure date/time as the event time.
+
+IMPORTANT: Look very carefully for times. Search the entire email body for any time references such as "10:00 AM", "2pm", "at noon", "from 9-10", "begins at 1:30", etc. Even if the time appears deep in the email body or in a different paragraph from the event title, extract it. Times are critical — always provide startTime and endTime when any time reference exists. All times are in Eastern Time (ET) unless the email specifies another timezone.
 
 Return ONLY a JSON array. If no events are found, return [].
 Do not include events that have already passed.
