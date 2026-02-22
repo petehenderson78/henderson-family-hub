@@ -93,20 +93,51 @@ export async function searchEmails(
     let body = "";
     const payload = detail.data.payload;
 
-    if (payload?.parts) {
-      const textPart = payload.parts.find(
-        (p) => p.mimeType === "text/plain"
-      );
-      if (textPart?.body?.data) {
-        body = Buffer.from(textPart.body.data, "base64url").toString("utf-8");
+    // Recursively find a part by mimeType (handles nested multipart structures)
+    function findPart(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      parts: any[] | undefined,
+      mime: string
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ): any | undefined {
+      if (!parts) return undefined;
+      for (const p of parts) {
+        if (p.mimeType === mime && p.body?.data) return p;
+        if (p.parts) {
+          const found = findPart(p.parts, mime);
+          if (found) return found;
+        }
       }
+      return undefined;
+    }
+
+    // Prefer text/plain, fall back to text/html (strip tags)
+    const textPart = findPart(payload?.parts, "text/plain");
+    const htmlPart = findPart(payload?.parts, "text/html");
+
+    if (textPart?.body?.data) {
+      body = Buffer.from(textPart.body.data, "base64url").toString("utf-8");
+    } else if (htmlPart?.body?.data) {
+      const raw = Buffer.from(htmlPart.body.data, "base64url").toString("utf-8");
+      // Strip HTML tags and decode common entities
+      body = raw
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&#\d+;/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
     } else if (payload?.body?.data) {
       body = Buffer.from(payload.body.data, "base64url").toString("utf-8");
     }
 
-    // Truncate body to 2000 chars
-    if (body.length > 2000) {
-      body = body.slice(0, 2000);
+    // Truncate body to 3000 chars to capture more detail from booking emails
+    if (body.length > 3000) {
+      body = body.slice(0, 3000);
     }
 
     emails.push({ subject, snippet, body });
