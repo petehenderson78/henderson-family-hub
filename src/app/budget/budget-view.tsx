@@ -1,53 +1,18 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/client";
-import { useEffect, useState, useCallback } from "react";
-import type { Expense } from "@/lib/types";
+import { useEffect, useState, useCallback, useRef } from "react";
+import type { Expense, RecurringExpense, BudgetGoal } from "@/lib/types";
 import LinkBankAccount from "./link-bank-account";
-
-const CATEGORIES = [
-  "Groceries",
-  "Dining Out",
-  "Gas",
-  "Kids Activities",
-  "Shopping",
-  "Bills",
-  "Entertainment",
-  "Other",
-];
-
-const CATEGORY_COLORS: Record<string, string> = {
-  Groceries: "bg-emerald-50 text-emerald-700",
-  "Dining Out": "bg-orange-50 text-orange-700",
-  Gas: "bg-amber-50 text-amber-700",
-  "Kids Activities": "bg-violet-50 text-violet-700",
-  Shopping: "bg-pink-50 text-pink-700",
-  Bills: "bg-red-50 text-red-700",
-  Entertainment: "bg-blue-50 text-blue-700",
-  Other: "bg-slate-100 text-slate-600",
-};
-
-const CATEGORY_CHART_COLORS: Record<string, string> = {
-  Groceries: "#10B981",
-  "Dining Out": "#F97316",
-  Gas: "#F59E0B",
-  "Kids Activities": "#8B5CF6",
-  Shopping: "#EC4899",
-  Bills: "#EF4444",
-  Entertainment: "#3B82F6",
-  Other: "#94A3B8",
-};
-
-const CATEGORY_BORDER_COLORS: Record<string, string> = {
-  Groceries: "border-l-emerald-500",
-  "Dining Out": "border-l-orange-500",
-  Gas: "border-l-amber-500",
-  "Kids Activities": "border-l-violet-500",
-  Shopping: "border-l-pink-500",
-  Bills: "border-l-red-500",
-  Entertainment: "border-l-blue-500",
-  Other: "border-l-slate-400",
-};
+import RecurringExpenses from "./recurring-expenses";
+import BudgetGoalsSettings from "./budget-goals-settings";
+import ExpenseTrends, { type MonthTrend } from "./expense-trends";
+import {
+  CATEGORIES,
+  CATEGORY_COLORS,
+  CATEGORY_CHART_COLORS,
+  CATEGORY_BORDER_COLORS,
+} from "./constants";
 
 function formatMonthYear(year: number, month: number) {
   return new Date(year, month).toLocaleDateString("en-US", {
@@ -84,6 +49,10 @@ function buildConicGradient(categories: [string, number][], total: number) {
   return `conic-gradient(${segments.join(", ")})`;
 }
 
+function getMonthKey(year: number, month: number) {
+  return `${year}-${String(month + 1).padStart(2, "0")}`;
+}
+
 export default function BudgetView({ userId }: { userId: string }) {
   const supabase = createClient();
   const [currentYear, setCurrentYear] = useState(() => new Date().getFullYear());
@@ -99,6 +68,20 @@ export default function BudgetView({ userId }: { userId: string }) {
   const [description, setDescription] = useState("");
   const [date, setDate] = useState(() => getTodayString());
   const [saving, setSaving] = useState(false);
+
+  // Recurring expenses state
+  const [recurringExpenses, setRecurringExpenses] = useState<RecurringExpense[]>([]);
+
+  // Budget goals state
+  const [budgetGoals, setBudgetGoals] = useState<BudgetGoal[]>([]);
+  const [showGoalsSettings, setShowGoalsSettings] = useState(false);
+
+  // Expense trends state
+  const [trends, setTrends] = useState<MonthTrend[]>([]);
+  const [showTrends, setShowTrends] = useState(false);
+
+  // Auto-apply guard
+  const autoApplyRan = useRef(false);
 
   useEffect(() => {
     setMounted(true);
@@ -121,9 +104,127 @@ export default function BudgetView({ userId }: { userId: string }) {
     setLoading(false);
   }, [currentYear, currentMonth, supabase]);
 
+  const fetchRecurringExpenses = useCallback(async () => {
+    const { data } = await supabase
+      .from("recurring_expenses")
+      .select("*")
+      .eq("is_active", true)
+      .order("day_of_month", { ascending: true });
+
+    setRecurringExpenses(data ?? []);
+  }, [supabase]);
+
+  const fetchBudgetGoals = useCallback(async () => {
+    const { data } = await supabase
+      .from("budget_goals")
+      .select("*")
+      .order("category", { ascending: true });
+
+    setBudgetGoals(data ?? []);
+  }, [supabase]);
+
+  const fetchTrends = useCallback(async () => {
+    const months: MonthTrend[] = [];
+    const now = new Date();
+
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const year = d.getFullYear();
+      const month = d.getMonth();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const startOfMonth = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+      const endOfMonth = `${year}-${String(month + 1).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+      const label = d.toLocaleDateString("en-US", { month: "short" });
+      const key = getMonthKey(year, month);
+
+      months.push({ month: key, label, total: 0 });
+
+      const { data } = await supabase
+        .from("expenses")
+        .select("amount")
+        .gte("date", startOfMonth)
+        .lte("date", endOfMonth);
+
+      if (data) {
+        months[months.length - 1].total = data.reduce(
+          (sum, e) => sum + Number(e.amount),
+          0
+        );
+      }
+    }
+
+    setTrends(months);
+  }, [supabase]);
+
+  // Auto-apply recurring expenses for current month
+  const autoApplyRecurring = useCallback(async () => {
+    if (autoApplyRan.current) return;
+    autoApplyRan.current = true;
+
+    const now = new Date();
+    const monthKey = getMonthKey(now.getFullYear(), now.getMonth());
+
+    const { data: active } = await supabase
+      .from("recurring_expenses")
+      .select("*")
+      .eq("is_active", true);
+
+    if (!active || active.length === 0) return;
+
+    const { data: existing } = await supabase
+      .from("recurring_expense_applications")
+      .select("recurring_expense_id")
+      .eq("applied_month", monthKey);
+
+    const appliedIds = new Set((existing ?? []).map((e) => e.recurring_expense_id));
+
+    for (const rec of active) {
+      if (appliedIds.has(rec.id)) continue;
+
+      const day = Math.min(
+        rec.day_of_month,
+        new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+      );
+      const expenseDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+      const { data: inserted } = await supabase
+        .from("expenses")
+        .insert({
+          user_id: rec.user_id,
+          amount: rec.amount,
+          category: rec.category,
+          description: rec.title,
+          date: expenseDate,
+        })
+        .select("id")
+        .single();
+
+      if (inserted) {
+        await supabase.from("recurring_expense_applications").insert({
+          recurring_expense_id: rec.id,
+          expense_id: inserted.id,
+          applied_month: monthKey,
+        });
+      }
+    }
+  }, [supabase]);
+
   useEffect(() => {
     fetchExpenses();
   }, [fetchExpenses]);
+
+  useEffect(() => {
+    fetchRecurringExpenses();
+    fetchBudgetGoals();
+    fetchTrends();
+  }, [fetchRecurringExpenses, fetchBudgetGoals, fetchTrends]);
+
+  // Auto-apply on mount, then refresh expenses
+  useEffect(() => {
+    autoApplyRecurring().then(() => {
+      fetchExpenses();
+    });
+  }, [autoApplyRecurring, fetchExpenses]);
 
   function prevMonth() {
     if (currentMonth === 0) {
@@ -154,6 +255,12 @@ export default function BudgetView({ userId }: { userId: string }) {
     (a, b) => b[1] - a[1]
   );
 
+  // Budget goals lookup
+  const goalByCategory: Record<string, number> = {};
+  for (const g of budgetGoals) {
+    goalByCategory[g.category] = Number(g.monthly_limit);
+  }
+
   async function handleQuickAdd(e: React.FormEvent) {
     e.preventDefault();
     if (!amount || !category) return;
@@ -174,6 +281,7 @@ export default function BudgetView({ userId }: { userId: string }) {
       setDate(getTodayString());
       setShowQuickAdd(false);
       fetchExpenses();
+      fetchTrends();
     }
     setSaving(false);
   }
@@ -181,6 +289,7 @@ export default function BudgetView({ userId }: { userId: string }) {
   async function handleDelete(expenseId: string) {
     await supabase.from("expenses").delete().eq("id", expenseId);
     fetchExpenses();
+    fetchTrends();
   }
 
   return (
@@ -209,6 +318,38 @@ export default function BudgetView({ userId }: { userId: string }) {
           </button>
         </div>
 
+        {/* 6-Month Trends (collapsible) */}
+        {trends.length > 0 && (
+          <div className="mb-4 rounded-2xl border border-slate-100 bg-white shadow-sm">
+            <button
+              onClick={() => setShowTrends(!showTrends)}
+              className="flex min-h-[44px] w-full items-center justify-between p-5 pb-3"
+            >
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                6-Month Trends
+              </h3>
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`text-slate-400 transition-transform ${showTrends ? "rotate-180" : ""}`}
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            {showTrends && (
+              <div className="px-5 pb-5">
+                <ExpenseTrends trends={trends} />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Donut Chart */}
         <div className="mb-4 rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
           <div className="flex items-center justify-center">
@@ -228,15 +369,84 @@ export default function BudgetView({ userId }: { userId: string }) {
           </div>
         </div>
 
-        {/* Category breakdown with color dots */}
+        {/* Category breakdown with budget goals */}
         {sortedCategories.length > 0 && (
           <div className="mb-6 rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-            <h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-slate-400">
-              By Category
-            </h3>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                By Category
+              </h3>
+              <button
+                onClick={() => setShowGoalsSettings(true)}
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-400 active:bg-slate-100"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+            </div>
             <ul className="space-y-3">
               {sortedCategories.map(([cat, total]) => {
-                const pct = totalSpent > 0 ? Math.round((total / totalSpent) * 100) : 0;
+                const goal = goalByCategory[cat];
+                const pctOfTotal = totalSpent > 0 ? Math.round((total / totalSpent) * 100) : 0;
+
+                if (goal) {
+                  const pctOfGoal = Math.round((total / goal) * 100);
+                  const remaining = goal - total;
+                  const barColor =
+                    pctOfGoal > 100
+                      ? "#EF4444"
+                      : pctOfGoal >= 75
+                        ? "#F59E0B"
+                        : "#10B981";
+                  const barWidth = Math.min(pctOfGoal, 100);
+
+                  return (
+                    <li key={cat}>
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            className="inline-block h-3 w-3 rounded-full"
+                            style={{ backgroundColor: CATEGORY_CHART_COLORS[cat] ?? "#94A3B8" }}
+                          />
+                          <span className="text-sm font-medium text-slate-700">
+                            {cat}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-semibold text-slate-900" suppressHydrationWarning>
+                            {formatCurrency(total)}
+                          </span>
+                          <span className="text-xs text-slate-400" suppressHydrationWarning>
+                            {" / "}{formatCurrency(goal)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="ml-[22px] h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className="h-full rounded-full transition-all"
+                          style={{
+                            width: `${barWidth}%`,
+                            backgroundColor: barColor,
+                          }}
+                        />
+                      </div>
+                      <p className="ml-[22px] mt-1 text-[11px] font-medium" suppressHydrationWarning>
+                        {remaining >= 0 ? (
+                          <span className="text-emerald-600">
+                            {formatCurrency(remaining)} remaining
+                          </span>
+                        ) : (
+                          <span className="text-red-500">
+                            {formatCurrency(Math.abs(remaining))} over budget
+                          </span>
+                        )}
+                      </p>
+                    </li>
+                  );
+                }
+
                 return (
                   <li key={cat}>
                     <div className="mb-1.5 flex items-center justify-between">
@@ -257,7 +467,7 @@ export default function BudgetView({ userId }: { userId: string }) {
                       <div
                         className="h-full rounded-full"
                         style={{
-                          width: `${pct}%`,
+                          width: `${pctOfTotal}%`,
                           backgroundColor: CATEGORY_CHART_COLORS[cat] ?? "#94A3B8",
                         }}
                       />
@@ -272,6 +482,18 @@ export default function BudgetView({ userId }: { userId: string }) {
         {/* Linked bank accounts */}
         <div className="mb-4">
           <LinkBankAccount />
+        </div>
+
+        {/* Recurring Bills */}
+        <div className="mb-4">
+          <RecurringExpenses
+            userId={userId}
+            expenses={recurringExpenses}
+            onChanged={() => {
+              fetchRecurringExpenses();
+              fetchExpenses();
+            }}
+          />
         </div>
 
         {/* Add Expense button + expense list */}
@@ -427,6 +649,16 @@ export default function BudgetView({ userId }: { userId: string }) {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Budget Goals Settings Modal */}
+      {showGoalsSettings && (
+        <BudgetGoalsSettings
+          userId={userId}
+          goals={budgetGoals}
+          onClose={() => setShowGoalsSettings(false)}
+          onSaved={fetchBudgetGoals}
+        />
       )}
     </div>
   );
