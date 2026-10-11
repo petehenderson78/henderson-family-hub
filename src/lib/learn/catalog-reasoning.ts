@@ -69,9 +69,9 @@ const LILY: Skill[] = [
     generator: "r.numberAnalogies",
     parentTip: "Point to the top row: 'What happened to the apples?' She must say the change (one more, double…) before touching an answer.",
     intro: [
-      "The top row shows a change: a group of pictures turns into a new group. Figure out what happened — one more? two more? double?",
-      "Then do the SAME change to the bottom row.",
-      "Example: 2 apples → 4 apples is 'two more'. So 1 fish → 3 fish.",
+      "The top row shows a change: a group of pictures turns into a new group. Figure out what happened — one more? two less? double?",
+      "Then do the SAME change to the bottom row. When there are two example rows, the change must work for both of them.",
+      "Example: 3 apples → 5 apples is 'two more'. So 1 fish → 3 fish.",
     ],
   }),
   lily({
@@ -111,7 +111,7 @@ const LILY: Skill[] = [
     standards: ["CogAT:Nonverbal:FigureClassification", "1.G.A.1", "MP.7"],
     prereqs: ["r1.pattern"],
     generator: "r.figureClassification",
-    parentTip: "Ask 'what is the same about all three?' — shape, colour, filled-in, or size. Only ONE thing is the same for all of them.",
+    parentTip: "Ask 'what is the same about all three?' — shape, color, filled-in, or size. Only ONE thing is the same for all of them.",
     intro: [
       "Three pictures are in a club. They all share one secret: maybe they are all triangles, or all blue, or all filled in.",
       "Find the secret, then pick the picture that can join the club.",
@@ -125,7 +125,7 @@ const LILY: Skill[] = [
     standards: ["CogAT:Nonverbal:FigureMatrices", "MP.7"],
     prereqs: ["r1.fig.class"],
     generator: "r.figureMatrix",
-    parentTip: "Say the rule out loud: 'Across, it turns. Down, it changes colour.' Then do the same thing to the bottom-left picture.",
+    parentTip: "Say the rule out loud: 'Across, it turns. Down, it changes color.' Then do the same thing to the bottom-left picture.",
     intro: [
       "The box has four spaces and one is empty. Look across the top row: how did the first picture change into the second?",
       "Now make the SAME change to the bottom-left picture to find the missing one.",
@@ -141,7 +141,7 @@ const LILY: Skill[] = [
     generator: "r.figureSeries",
     parentTip: "Cover all but the first two pictures: 'what changed?' Check the change happens again, then ask for the next one.",
     intro: [
-      "The pictures march in a row, and each one changes the same way as the one before: turning, changing colour, or getting bigger.",
+      "The pictures march in a row, and each one changes the same way as the one before: turning, changing color, or getting bigger.",
       "Spot the change, then do it one more time.",
       "Example: an arrow turns a little to the right each time — the next arrow turns once more.",
     ],
@@ -172,9 +172,9 @@ const LILY: Skill[] = [
     generator: "r.verbalClassification",
     parentTip: "Ask her to NAME the group ('these are all fruits') before she picks. Naming the rule is the skill.",
     intro: [
-      "Three things go together because they are the same kind: apple, banana, grape are all fruits.",
+      "Three things go together because they are the same kind: a lion, a bear and a wolf are all wild animals.",
       "Say what kind they are, then pick the picture that is the same kind.",
-      "Example: dog, cat, rabbit are pets — so a hamster goes with them, not a shark.",
+      "Example: a fork, a cup and a bowl are kitchen things — so a pan goes with them, not a shoe.",
     ],
   }),
   lily({
@@ -184,11 +184,11 @@ const LILY: Skill[] = [
     standards: ["CogAT:Verbal:PictureAnalogies", "L.1.5"],
     prereqs: ["r1.verbal.class"],
     generator: "r.verbalAnalogies",
-    parentTip: "Play 'analogy tennis' in the car: 'bird is to nest as bee is to…?' Have her explain WHY the pair goes together.",
+    parentTip: "Play 'analogy tennis' in the car: 'cow is to moo as sheep is to…?' Have her explain WHY the pair goes together.",
     intro: [
-      "Two things go together in a special way: a bird lives in a nest. Then a new thing needs its partner in the SAME way.",
+      "Two things go together in a special way: a pig says 'oink'. Then a new thing needs its partner in the SAME way.",
       "Say the way they go together, then find the partner.",
-      "Example: bird is to nest as bee is to… hive, because that is where a bee lives.",
+      "Example: pig is to oink as duck is to… quack, because that is the sound a duck makes.",
     ],
   }),
   lily({
@@ -202,7 +202,7 @@ const LILY: Skill[] = [
     intro: [
       "Listen to the question. Think about every word, then pick the picture that answers it.",
       "Some answers are tricky: they look nice but do not fit ALL the words.",
-      "Example: 'Which one do you use to keep dry in the rain?' — an umbrella, not sunglasses.",
+      "Example: 'Which one do you use to dig in the sand?' — a shovel, not a pillow.",
     ],
   }),
 
@@ -245,7 +245,7 @@ const LILY: Skill[] = [
     generator: "r.logicGrid",
     parentTip: "Read the clues one at a time. After each clue ask 'so what do we know now?' and cross out what cannot be true.",
     intro: [
-      "Three kids each have a different pet. The clues tell you who does NOT have something.",
+      "Three kids each have a different pet. One clue tells you who has a pet for sure; the other tells you who does NOT have one.",
       "Cross out what cannot be true. When only one choice is left for a kid, that is their pet.",
       "Example: 'Ava has the dog. Ben does not have the cat.' — so Ben has the fish, and Cara has the cat.",
     ],
@@ -344,7 +344,7 @@ const COLE: Skill[] = [
     params: { variant: "belongs" },
     parentTip: "Have him list what is the same AND what is different about the three. The rule is the one thing that never changes.",
     intro: [
-      "Three figures share exactly one rule — same shape, filling, colour, size, number of copies, direction, or curved vs straight.",
+      "Three figures share exactly one rule — same shape, filling, color, size, number of copies, which way arrows or triangles point, or curved vs straight.",
       "Ignore everything that changes; the rule is what stays the same. Then pick the figure that follows it.",
       "Example: a solid blue arrow, a solid pink circle, a solid orange star — the rule is 'solid', so a solid heart belongs.",
     ],
@@ -373,7 +373,7 @@ const COLE: Skill[] = [
     generator: "r.figureMatrix",
     parentTip: "Two rules: one ACROSS the rows and one DOWN the columns. Have him say both rules before looking at the choices.",
     intro: [
-      "A 3×3 grid with one empty corner. One rule works across every row and another works down every column: turn, flip, fill, size, number, shape or colour.",
+      "A 3×3 grid with one empty corner. One rule works across every row and another works down every column: turn, flip, fill, size, number, shape or color.",
       "Find both rules, then apply them to reach the empty cell.",
       "Example: across, shapes get darker; down, they turn a quarter turn. The missing one is the darkest, most-turned version.",
     ],
@@ -385,10 +385,10 @@ const COLE: Skill[] = [
     standards: ["CogAT:Nonverbal:FigureSeries", "MP.8"],
     prereqs: ["r3.matrix"],
     generator: "r.figureSeries",
-    parentTip: "Sometimes two things change at once (turning AND filling). Check each attribute separately: shape? colour? turn? fill?",
+    parentTip: "Sometimes two things change at once (turning AND filling). Check each attribute separately: shape? color? turn? fill?",
     intro: [
-      "Each figure changes from the one before — sometimes in two ways at once (turn and change colour).",
-      "Check one attribute at a time: direction, filling, size, colour, shape, number of copies.",
+      "Each figure changes from the one before — sometimes in two ways at once (turn and change color).",
+      "Check one attribute at a time: direction, filling, size, color, shape, number of copies.",
       "Example: an L turns a quarter turn each step and flips between empty and solid — the next one is turned again AND switched.",
     ],
   }),
@@ -433,9 +433,9 @@ const COLE: Skill[] = [
     generator: "r.verbalClassification",
     parentTip: "Insist he names the category precisely ('metals', not 'shiny things'). A vague category lets wrong answers sneak in.",
     intro: [
-      "Three words belong to one group: copper, iron, silver are metals. Name the group as exactly as you can.",
+      "Three words belong to one group: tulip, rose, daisy are flowers. Name the group as exactly as you can.",
       "Then pick the word that fits that exact group — not just a word that is related.",
-      "Example: copper, iron, silver → gold (a metal). 'Coin' is made of metal but is not a metal.",
+      "Example: tulip, rose, daisy → lily (a flower). 'Vase' holds flowers but is not a flower.",
     ],
   }),
   cole({
@@ -449,7 +449,7 @@ const COLE: Skill[] = [
     intro: [
       "Read the first pair and say how they go together: part of, kind of, used for, opposite of, baby of, maker of…",
       "Then finish the second pair in exactly the same way.",
-      "Example: author : book :: composer : song — an author makes a book, a composer makes a song.",
+      "Example: poet : poem :: chef : meal — a poet makes a poem, a chef makes a meal.",
     ],
   }),
   cole({
@@ -463,7 +463,7 @@ const COLE: Skill[] = [
     intro: [
       "One word is missing. Every other word in the sentence is a clue — especially signal words like 'because', 'but', 'even though' and 'so'.",
       "Try each choice in the gap and keep the one that fits ALL the clues.",
-      "Example: 'Even though it was ___ outside, Maya wore her heavy coat.' — 'even though' signals a surprise, so the answer is 'warm'.",
+      "Example: 'Even though the movie was ___, Jack stayed awake until the very end.' — 'even though' signals a surprise, so the answer is 'boring'.",
     ],
   }),
 

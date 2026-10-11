@@ -272,10 +272,13 @@ function seriesL3(rng: Rng, kinds: readonly string[]): Series {
 
 const L1_STEPS = [1, 2, 5, 10];
 const L3_KINDS = ["add", "sub", "double", "growing", "shrinking", "alternate", "interleave", "squares", "fib"];
+/** Every kind seriesL3 implements (anything else in params.kinds is dropped, never silently turned into "add"). */
+export const SERIES_KINDS: readonly string[] = [...L3_KINDS, "triple"];
 
 const numberSeries: Generator = (ctx) => {
   const { rng } = ctx;
-  const s = isL3(ctx) ? seriesL3(rng, strListParam(ctx, "kinds") ?? L3_KINDS) : seriesL1(rng, numListParam(ctx, "steps") ?? L1_STEPS, Math.max(10, numParam(ctx, "max", 50)));
+  const kinds = (strListParam(ctx, "kinds") ?? L3_KINDS).filter((k) => SERIES_KINDS.includes(k));
+  const s = isL3(ctx) ? seriesL3(rng, kinds.length ? kinds : L3_KINDS) : seriesL1(rng, numListParam(ctx, "steps") ?? L1_STEPS, Math.max(10, numParam(ctx, "max", 50)));
   const beads = !isL3(ctx) && Math.max(...s.terms) <= 10;
   const list = s.terms.join(", ");
   return choice(
@@ -293,17 +296,18 @@ const numberSeries: Generator = (ctx) => {
 // r.numberAnalogies — Quantitative: Number Analogies
 // ---------------------------------------------------------------------------
 
-const COUNT_EMOJI: readonly [string, string][] = [
-  ["🍎", "apples"],
-  ["🐟", "fish"],
-  ["⭐", "stars"],
-  ["🐶", "dogs"],
-  ["🌸", "flowers"],
-  ["🎈", "balloons"],
-  ["🍪", "cookies"],
-  ["🐸", "frogs"],
-  ["🚗", "cars"],
-  ["🦋", "butterflies"],
+/** [emoji, one, many] */
+const COUNT_EMOJI: readonly [string, string, string][] = [
+  ["🍎", "apple", "apples"],
+  ["🐟", "fish", "fish"],
+  ["⭐", "star", "stars"],
+  ["🐶", "dog", "dogs"],
+  ["🌸", "flower", "flowers"],
+  ["🎈", "balloon", "balloons"],
+  ["🍪", "cookie", "cookies"],
+  ["🐸", "frog", "frogs"],
+  ["🚗", "car", "cars"],
+  ["🦋", "butterfly", "butterflies"],
 ];
 
 interface Relation {
@@ -313,14 +317,41 @@ interface Relation {
   domain: number[];
 }
 
-function relationsL1(): Relation[] {
+interface RelationL1 extends Relation {
+  /** example pairs shown: "double" and "half" need two, because one pair (2 → 4) also reads as "two more" */
+  examples: 1 | 2;
+}
+
+function relationsL1(): RelationL1[] {
   return [
-    { word: "one more", f: (n) => n + 1, domain: [1, 2, 3, 4, 5] },
-    { word: "two more", f: (n) => n + 2, domain: [1, 2, 3, 4] },
-    { word: "one less", f: (n) => n - 1, domain: [2, 3, 4, 5, 6] },
-    { word: "double (twice as many)", f: (n) => n * 2, domain: [1, 2, 3] },
-    { word: "half as many", f: (n) => n / 2, domain: [2, 4, 6] },
+    { word: "one more", f: (n) => n + 1, domain: [1, 2, 3, 4, 5, 6], examples: 1 },
+    { word: "two more", f: (n) => n + 2, domain: [1, 2, 3, 4, 5], examples: 1 },
+    { word: "one less", f: (n) => n - 1, domain: [2, 3, 4, 5, 6, 7], examples: 1 },
+    { word: "two less", f: (n) => n - 2, domain: [3, 4, 5, 6, 7], examples: 1 },
+    { word: "double (twice as many)", f: (n) => n * 2, domain: [1, 2, 3, 4], examples: 2 },
+    { word: "half as many", f: (n) => n / 2, domain: [2, 4, 6, 8], examples: 2 },
   ];
+}
+
+/** Rules a grade-1 child might read into "3 apples turn into 5 apples" (add/take away 1-5, double, triple, half, a third). */
+const L1_READINGS: readonly ((n: number) => number)[] = [
+  ...[1, 2, 3, 4, 5].map((k) => (n: number) => n + k),
+  ...[1, 2, 3, 4, 5].map((k) => (n: number) => n - k),
+  (n) => n * 2,
+  (n) => n * 3,
+  (n) => n / 2,
+  (n) => n / 3,
+];
+
+/** Every answer for `c` given by some reading that fits all the example pairs (one value = unambiguous). */
+function l1Answers(pairs: readonly (readonly [number, number])[], c: number): Set<number> {
+  const out = new Set<number>();
+  for (const r of L1_READINGS) {
+    if (!pairs.every(([x, y]) => r(x) === y)) continue;
+    const v = r(c);
+    if (Number.isInteger(v) && v >= 0) out.add(v);
+  }
+  return out;
 }
 
 function relationsL3(rng: Rng): Relation {
@@ -353,21 +384,37 @@ const numberAnalogies: Generator = (ctx) => {
   const { rng } = ctx;
   if (!isL3(ctx)) {
     const rel = pick(rng, relationsL1());
-    const [a, c] = sample(rng, rel.domain, 2);
-    const [e1, e2] = sample(rng, COUNT_EMOJI, 2);
-    const fa = rel.f(a);
+    // pick numbers until every simple reading of the example row(s) gives the same answer
+    let examples: number = rel.examples;
+    let nums: number[] = [];
+    for (let tries = 0; tries < 60; tries++) {
+      if (tries === 40) examples = 2; // safety net: two example rows always pin the rule down
+      nums = sample(rng, rel.domain, examples + 1);
+      const ans = l1Answers(nums.slice(0, examples).map((x) => [x, rel.f(x)] as const), nums[examples]);
+      if (ans.size === 1 && ans.has(rel.f(nums[examples]))) break;
+    }
+    const xs = nums.slice(0, examples);
+    const c = nums[examples];
     const fc = rel.f(c);
-    const group = (emoji: string, n: number) => emoji.repeat(n);
+    const kinds = sample(rng, COUNT_EMOJI, examples + 1);
+    const ask = kinds[examples];
+    const word = (k: readonly [string, string, string], v: number) => `${v} ${v === 1 ? k[1] : k[2]}`;
+    const turn = (v: number) => (v === 1 ? "turns" : "turn");
+    const group = (emoji: string, v: number) => emoji.repeat(v);
     const n = nOptions(ctx, 3, 4);
-    const cands = [fc + 1, fc - 1, c, c + (fa - a), fc + 2, c + 1, c - 1].filter((v) => v >= 1 && v <= 8 && v !== fc);
-    const built = assemble(rng, { emoji: group(e2[0], fc) }, cands.map((v) => ({ emoji: group(e2[0], v) })), n);
-    const prompt = `${a} ${e1[1]} turn into ${fa} ${e1[1]}. ${c} ${e2[1]} turn into how many ${e2[1]}?`;
+    const fa = rel.f(xs[0]);
+    const cands = [fc + 1, fc - 1, c, c + (fa - xs[0]), fc + 2, c + 1, c - 1].filter((v) => v >= 1 && v <= 8 && v !== fc);
+    const built = assemble(rng, { emoji: group(ask[0], fc) }, cands.map((v) => ({ emoji: group(ask[0], v) })), n);
+    const shown = xs.map((x, i) => `${word(kinds[i], x)} ${turn(x)} into ${word(kinds[i], rel.f(x))}.`).join(" ");
+    const prompt = `${shown} ${c} ${c === 1 ? ask[1] : ask[2]} ${turn(c)} into how many ${ask[2]}?`;
+    const rows = xs.map((x, i) => [group(kinds[i][0], x), group(kinds[i][0], rel.f(x))]);
+    const pairsText = xs.map((x) => `${x} → ${rel.f(x)}`).join(" and ");
     return choice(
       {
         prompt,
-        display: { grid: [[group(e1[0], a), group(e1[0], fa)], [group(e2[0], c), "?"]], speak: prompt },
-        explain: `Top row: ${a} became ${fa}, that is ${rel.word}. Do the same to the bottom row: ${c} ${e2[1]} become ${fc} ${e2[1]}.`,
-        hint: `Count the ${e1[1]} in the top row. What happened to them? Now do the same thing to the ${e2[1]}.`,
+        display: { grid: [...rows, [group(ask[0], c), "?"]], speak: prompt },
+        explain: `${examples === 1 ? "Top row" : "Both top rows"}: ${pairsText}, that is ${rel.word}. Do the same to the bottom row: ${word(ask, c)} ${c === 1 ? "becomes" : "become"} ${word(ask, fc)}.`,
+        hint: `Count the pictures in the top row${examples === 1 ? "" : "s"}. What happened to them?${examples === 1 ? "" : " Check that the same change works for both rows."} Now do the same thing to the ${ask[2]}.`,
       },
       built
     );
@@ -393,11 +440,15 @@ const numberAnalogies: Generator = (ctx) => {
 // r.numberPuzzles — Quantitative: Number Puzzles (balance / trains / equations)
 // ---------------------------------------------------------------------------
 
+/** Every kind numberPuzzles implements; unknown names in params.kinds are dropped (they used to fall through to the grade-1 balance scale). */
+export const NUMBER_PUZZLE_KINDS: readonly string[] = ["balance", "train", "missing", "two-eq", "same-blank", "substitute"];
+
 const numberPuzzles: Generator = (ctx) => {
   const { rng } = ctx;
   const n = nOptions(ctx, 3, 4);
-  const kinds = strListParam(ctx, "kinds") ?? (isL3(ctx) ? ["missing", "missing", "two-eq", "same-blank", "substitute"] : ["balance", "balance", "train"]);
-  const kind = pick(rng, kinds);
+  const defaults = isL3(ctx) ? ["missing", "missing", "two-eq", "same-blank", "substitute"] : ["balance", "balance", "train"];
+  const listed = (strListParam(ctx, "kinds") ?? defaults).filter((k) => NUMBER_PUZZLE_KINDS.includes(k));
+  const kind = pick(rng, listed.length ? listed : defaults);
   switch (kind) {
     case "train": {
       const total = int(rng, 3, 9);
@@ -531,6 +582,45 @@ const numberPuzzles: Generator = (ctx) => {
         numberChoice(rng, answer, [c, answer + 1, answer - 1, m, c - answer], n)
       );
     }
+    case "substitute": {
+      // put known values into an expression: ■ = a, ● = …, what is …?
+      const a = int(rng, 2, 9);
+      const form = pick(rng, ["chain", "two", "times"]);
+      if (form === "chain") {
+        const k = int(rng, 1, 9);
+        const answer = 2 * a + k;
+        return choice(
+          {
+            prompt: `■ = ${a}   and   ● = ■ + ${k}.   What is ■ + ●?`,
+            explain: `First find ●: ● = ${a} + ${k} = ${a + k}. Then ■ + ● = ${a} + ${a + k} = ${answer}.`,
+            hint: "Work out ● first by putting the number for ■ into its equation. Then add.",
+          },
+          numberChoice(rng, answer, [a + k, a + 2 * k, 2 * a, answer + 1, answer - 1], n)
+        );
+      }
+      if (form === "two") {
+        const b = int(rng, 2, 9);
+        const answer = 2 * a + b;
+        return choice(
+          {
+            prompt: `■ = ${a}   and   ● = ${b}.   What is ■ + ■ + ●?`,
+            explain: `Put the numbers in: ${a} + ${a} + ${b} = ${answer}.`,
+            hint: "Write the number under each shape, then add them all.",
+          },
+          numberChoice(rng, answer, [a + b, a + 2 * b, 2 * a, answer + 1, answer - 1], n)
+        );
+      }
+      const b = int(rng, 2, 6);
+      const answer = a * b - a;
+      return choice(
+        {
+          prompt: `■ = ${a}   and   ● = ${b}.   What is ■ × ● − ■?`,
+          explain: `Put the numbers in: ${a} × ${b} − ${a} = ${a * b} − ${a} = ${answer}. Multiply first, then subtract.`,
+          hint: "Write the number under each shape. Do the × first, then the −.",
+        },
+        numberChoice(rng, answer, [a * b, a * b - b, a + b, answer + 1, answer - 1], n)
+      );
+    }
     default: {
       // balance (level 1): ? + b = c or b + ? = c, shown on a balance scale
       const c = int(rng, 4, 10);
@@ -566,7 +656,9 @@ interface Rule {
   shapes: ShapeName[];
 }
 
-const ATTR_CLASS: Record<Attr, string> = { rot: "orient", flip: "orient", fill: "fill", shade: "fill", size: "size", count: "count", shape: "shape", hue: "hue" };
+// size and count share a class: a copy in a group of 3 is drawn smaller than a single figure, so a size
+// rule next to a count rule would make "bigger" and "fewer" look alike
+const ATTR_CLASS: Record<Attr, string> = { rot: "orient", flip: "orient", fill: "fill", shade: "fill", size: "magnitude", count: "magnitude", shape: "shape", hue: "hue" };
 
 function applyRule(r: Rule, f: Figure): Figure {
   switch (r.attr) {
@@ -608,7 +700,7 @@ function ruleWord(r: Rule): string {
     case "shape":
       return `changes shape (${r.shapes.map((s) => SHAPE_INFO[s].word).join(" → ")})`;
     default:
-      return "changes colour (blue → orange → pink)";
+      return "changes color, always in the order blue → orange → pink → blue";
   }
 }
 
@@ -642,13 +734,15 @@ function startFigure(rng: Rng, rules: readonly Rule[], l3: boolean, chainLen: nu
   const countRule = rules.find((r) => r.attr === "count");
   let count: 1 | 2 | 3 = l3 ? pick(rng, [1, 1, 2] as const) : 1;
   if (countRule) count = countRule.step === 1 ? (chainLen >= 3 ? 1 : pick(rng, [1, 2] as const)) : chainLen >= 3 ? 3 : pick(rng, [2, 3] as const);
+  // a shade rule starts empty so the figures really do get darker (empty → light → solid), as the explanation says
   const shade = rules.some((r) => r.attr === "shade");
   return {
     shape,
     rot: SHAPE_INFO[shape].period === 4 ? int(rng, 0, 3) : 0,
     flip: l3 && SHAPE_INFO[shape].chiral && rng() < 0.3,
-    fill: shade ? (int(rng, 0, 2) as 0 | 1 | 2) : pick(rng, [0, 2] as const),
-    size: pick(rng, [0, 1] as const),
+    fill: shade ? 0 : pick(rng, [0, 2] as const),
+    // groups of copies are drawn big so a group of 3 never shrinks to a speck
+    size: countRule ? 1 : pick(rng, [0, 1] as const),
     count,
     hue: int(rng, 0, 2) as 0 | 1 | 2,
   };
@@ -736,6 +830,56 @@ const figureMatrix: Generator = (ctx) => {
 
 type ClassKey = "shape" | "fill" | "hue" | "size" | "count" | "rot" | "curved";
 
+/** Shapes with an obvious pointing direction: "turned the same way" only compares these (a heart and an L have no shared "up"). */
+const POINTER_SHAPES: readonly ShapeName[] = ["arrow", "triangle"];
+
+/** Everything a child can see and compare across figures (a second shared feature is a second possible rule). */
+type ClassFeature = "shape" | "fill" | "hue" | "size" | "count" | "curved" | "orient";
+const CLASS_FEATURES: readonly ClassFeature[] = ["shape", "fill", "hue", "size", "count", "curved", "orient"];
+
+/** The value of one visible feature; orientation is comparable only between pointers, or between copies of one shape. */
+function classFeature(f: Figure, feat: ClassFeature): string {
+  const info = SHAPE_INFO[f.shape];
+  switch (feat) {
+    case "shape":
+      return f.shape;
+    case "fill":
+      return String(f.fill);
+    case "hue":
+      return String(f.hue);
+    case "size":
+      return String(f.size);
+    case "count":
+      return String(f.count);
+    case "curved":
+      return info.curved;
+    default: {
+      const rot = info.period === 1 ? 0 : ((f.rot % info.period) + info.period) % info.period;
+      return POINTER_SHAPES.includes(f.shape) ? `points:${rot}` : `${f.shape}:${rot}`;
+    }
+  }
+}
+
+/** "Which belongs?": the answer must share EVERY feature the three examples share, or a near-miss could be just as right. */
+function belongsIsUnique(examples: readonly Figure[], answer: Figure): boolean {
+  return CLASS_FEATURES.every((feat) => {
+    const vals = new Set(examples.map((e) => classFeature(e, feat)));
+    return vals.size > 1 || vals.has(classFeature(answer, feat));
+  });
+}
+
+/** "Which does NOT belong?": no feature may split the four 3-to-1 with one of the members left over (a second odd one out). */
+function oddIsUnique(members: readonly Figure[], odd: Figure): boolean {
+  const all = [...members, odd];
+  return CLASS_FEATURES.every((feat) => {
+    const vals = all.map((f) => classFeature(f, feat));
+    return members.every((_, i) => {
+      const rest = vals.filter((_, j) => j !== i);
+      return !(rest.every((w) => w === rest[0]) && vals[i] !== rest[0]);
+    });
+  });
+}
+
 function classRuleName(key: ClassKey, v: number | string): string {
   switch (key) {
     case "shape":
@@ -749,7 +893,7 @@ function classRuleName(key: ClassKey, v: number | string): string {
     case "count":
       return `all groups of ${v}`;
     case "rot":
-      return "all turned the same way";
+      return "all pointing the same way";
     default:
       return v === "yes" ? "all curved shapes (round edges)" : "all shapes with straight sides";
   }
@@ -774,8 +918,8 @@ const figureClassification: Generator = (ctx) => {
     badShapes = basePool.filter((s) => s !== v);
   } else if (key === "rot") {
     v = int(rng, 0, 3);
-    goodShapes = TURN_SHAPES;
-    badShapes = TURN_SHAPES;
+    goodShapes = POINTER_SHAPES;
+    badShapes = POINTER_SHAPES;
   } else if (key === "curved") {
     v = pick(rng, ["yes", "no"]);
     goodShapes = v === "yes" ? CURVED_SHAPES : STRAIGHT_SHAPES.filter((s) => l3 || SIMPLE_SHAPES.includes(s));
@@ -785,13 +929,15 @@ const figureClassification: Generator = (ctx) => {
   else if (key === "size") v = int(rng, 0, 1);
   else v = pick(rng, [2, 3]);
 
+  // Sizes are only comparable between single figures (a copy in a group of 3 is drawn smaller), so
+  // groups appear only when the rule is about the number of copies — and then every figure is big.
   const rnd = (shape: ShapeName): Figure => ({
     shape,
     rot: SHAPE_INFO[shape].period === 4 ? int(rng, 0, 3) : 0,
     flip: false,
     fill: pick(rng, [0, 2] as const),
-    size: pick(rng, [0, 1] as const),
-    count: l3 ? pick(rng, [1, 1, 2, 3] as const) : 1,
+    size: key === "count" ? 1 : pick(rng, [0, 1] as const),
+    count: key === "count" ? pick(rng, [1, 2, 3] as const) : 1,
     hue: int(rng, 0, 2) as 0 | 1 | 2,
   });
   const setKey = (f: Figure): Figure => {
@@ -812,35 +958,65 @@ const figureClassification: Generator = (ctx) => {
   };
 
   // three exemplars: share the key, vary everything else (never all three alike on a visible attribute)
-  const exShapes = key === "shape" ? [v, v, v] as ShapeName[] : sample(rng, goodShapes, 3);
-  const exemplars = exShapes.map((s) => setKey(rnd(s)));
-  const vary = (get: (f: Figure) => number, set: (f: Figure, x: number) => Figure, values: readonly number[]) => {
-    if (new Set(exemplars.map(get)).size > 1) return;
-    const i = int(rng, 0, 2);
-    const alt = pick(rng, values.filter((x) => x !== get(exemplars[i])));
-    exemplars[i] = set(exemplars[i], alt);
+  const makeExemplars = (): Figure[] => {
+    const exShapes: ShapeName[] =
+      key === "shape" ? [v as ShapeName, v as ShapeName, v as ShapeName] : key === "rot" ? shuffle(rng, [...POINTER_SHAPES, pick(rng, POINTER_SHAPES)]) : sample(rng, goodShapes, 3);
+    const ex = exShapes.map((sh) => setKey(rnd(sh)));
+    const vary = (get: (f: Figure) => number, set: (f: Figure, x: number) => Figure, values: readonly number[]) => {
+      if (new Set(ex.map(get)).size > 1) return;
+      const i = int(rng, 0, 2);
+      const alt = pick(rng, values.filter((x) => x !== get(ex[i])));
+      ex[i] = set(ex[i], alt);
+    };
+    if (key !== "fill") vary((f) => f.fill, (f, x) => ({ ...f, fill: x as 0 | 2 }), [0, 2]);
+    if (key !== "hue") vary((f) => f.hue, (f, x) => ({ ...f, hue: x as 0 | 1 | 2 }), [0, 1, 2]);
+    if (key !== "size" && key !== "count") vary((f) => f.size, (f, x) => ({ ...f, size: x as 0 | 1 }), [0, 1]);
+    if (key !== "rot" && ex.every((f) => SHAPE_INFO[f.shape].period === 4)) vary((f) => f.rot, (f, x) => ({ ...f, rot: x }), [0, 1, 2, 3]);
+    return ex;
   };
-  if (key !== "fill") vary((f) => f.fill, (f, x) => ({ ...f, fill: x as 0 | 2 }), [0, 2]);
-  if (key !== "hue") vary((f) => f.hue, (f, x) => ({ ...f, hue: x as 0 | 1 | 2 }), [0, 1, 2]);
-  if (key !== "size") vary((f) => f.size, (f, x) => ({ ...f, size: x as 0 | 1 }), [0, 1]);
-  if (key !== "count" && l3) vary((f) => f.count, (f, x) => ({ ...f, count: x as 1 | 2 | 3 }), [1, 2, 3]);
-  if (key !== "rot" && exemplars.every((f) => SHAPE_INFO[f.shape].period === 4)) vary((f) => f.rot, (f, x) => ({ ...f, rot: x }), [0, 1, 2, 3]);
-
-  // the one that belongs: shares the key, looks different from every exemplar
-  const unusedGood = goodShapes.filter((s) => !exShapes.includes(s));
-  let correct = setKey(rnd(unusedGood.length ? pick(rng, unusedGood) : pick(rng, goodShapes)));
-  for (let tries = 0; tries < 12 && exemplars.some((e) => figureKey(e) === figureKey(correct)); tries++) correct = setKey(rnd(correct.shape));
-  if (exemplars.some((e) => figureKey(e) === figureKey(correct))) correct = { ...correct, hue: ((correct.hue + 1) % 3) as 0 | 1 | 2, size: correct.size === 0 ? 1 : 0 };
-
-  // near-miss distractors: each looks like an exemplar but breaks the rule
-  const nearMiss = shuffle(rng, exemplars).map((e) => breakKey(e));
-  const spare = [breakKey(correct), breakKey(rnd(pick(rng, badShapes))), breakKey(rnd(pick(rng, badShapes)))];
+  /** three examples that are all different pictures (two identical ones would collapse into one option) */
+  const distinctExemplars = (): Figure[] => {
+    let ex = makeExemplars();
+    for (let tries = 0; tries < 30 && new Set(ex.map(figureKey)).size < 3; tries++) ex = makeExemplars();
+    return ex;
+  };
   const ruleName = classRuleName(key, v);
-  const hint = "Ask: what do all three have in common — the shape, the colour, the filling, the size, how they are turned, or how many copies there are? Only one thing is the same for all of them.";
+  const hint = "Ask: what do all three have in common — the shape, the color, the filling, the size, which way they point, or how many copies there are? Only one thing is the same for all of them.";
 
   if (variant === "odd") {
-    const odd = nearMiss[0];
-    const built = assemble(rng, { svg: figureSvg(odd) }, [...exemplars, correct].map((f) => ({ svg: figureSvg(f) })), 4);
+    // the odd one copies one member but breaks the key; then any other feature that would leave a
+    // DIFFERENT figure as the only one unlike the rest is evened out (or another member is copied)
+    const keyFeature: ClassFeature = key === "rot" ? "orient" : key;
+    let members = distinctExemplars();
+    let odd = breakKey(members[0]);
+    search: for (let tries = 0; tries < 30; tries++) {
+      if (tries > 0) {
+        members = distinctExemplars();
+        odd = breakKey(members[0]);
+      }
+      for (const base of shuffle(rng, members)) {
+        let o = breakKey(base);
+        for (const feat of ["fill", "hue", "size", "count", "orient"] as const) {
+          if (feat === keyFeature) continue;
+          const vals = members.map((m) => classFeature(m, feat));
+          const ov = classFeature(o, feat);
+          // o matches two members and the third differs → that third one would be "the odd one" too
+          const loner = members.findIndex((_, i) => vals[i] !== ov && vals.filter((w, j) => j !== i && w === ov).length === 2);
+          if (loner < 0) continue;
+          const m = members[loner];
+          if (feat === "fill") o = { ...o, fill: m.fill };
+          else if (feat === "hue") o = { ...o, hue: m.hue };
+          else if (feat === "size") o = { ...o, size: m.size };
+          else if (feat === "count") o = { ...o, count: m.count };
+          else if (SHAPE_INFO[o.shape].period === 4) o = { ...o, rot: [0, 1, 2, 3].find((r) => !vals.includes(classFeature({ ...o, rot: r }, "orient"))) ?? o.rot };
+        }
+        if (classFeature(o, keyFeature) !== classFeature(members[0], keyFeature) && oddIsUnique(members, o)) {
+          odd = o;
+          break search;
+        }
+      }
+    }
+    const built = assemble(rng, { svg: figureSvg(odd) }, members.map((f) => ({ svg: figureSvg(f) })), 4);
     const prompt = "Which picture does NOT belong with the others?";
     return choice(
       {
@@ -852,7 +1028,33 @@ const figureClassification: Generator = (ctx) => {
       built
     );
   }
-  const built = figureOptions(rng, correct, [nearMiss, spare], nOptions(ctx, 3, 4));
+
+  const exemplars = distinctExemplars();
+  const exShapes = exemplars.map((e) => e.shape);
+  // the one that belongs: shares the key AND every other feature the three happen to share
+  // (all curved, all single …), and still looks different from each of them
+  const sharedCurve = new Set(exemplars.map((e) => SHAPE_INFO[e.shape].curved)).size === 1 ? SHAPE_INFO[exemplars[0].shape].curved : null;
+  const fits = goodShapes.filter((sh) => sharedCurve === null || SHAPE_INFO[sh].curved === sharedCurve);
+  const unused = fits.filter((sh) => !exShapes.includes(sh));
+  const common = (f: Figure): Figure => {
+    let out = f;
+    const same = <K extends keyof Figure>(k: K) => new Set(exemplars.map((e) => e[k])).size === 1;
+    if (same("fill")) out = { ...out, fill: exemplars[0].fill };
+    if (same("hue")) out = { ...out, hue: exemplars[0].hue };
+    if (same("size")) out = { ...out, size: exemplars[0].size };
+    if (same("count")) out = { ...out, count: exemplars[0].count };
+    return setKey(out);
+  };
+  let correct = common(rnd(unused.length ? pick(rng, unused) : pick(rng, fits)));
+  for (let tries = 0; tries < 20 && (exemplars.some((e) => figureKey(e) === figureKey(correct)) || !belongsIsUnique(exemplars, correct)); tries++) {
+    correct = common(rnd(unused.length ? pick(rng, unused) : pick(rng, fits)));
+  }
+
+  // near-miss distractors: each looks like an exemplar but breaks the rule
+  const nearMiss = shuffle(rng, exemplars).map((e) => breakKey(e));
+  const spare = [breakKey(correct), breakKey(rnd(pick(rng, badShapes))), breakKey(rnd(pick(rng, badShapes)))];
+  const backup = Array.from({ length: 12 }, () => breakKey(setKey(rnd(pick(rng, basePool)))));
+  const built = figureOptions(rng, correct, [nearMiss, spare, backup], nOptions(ctx, 3, 4));
   const prompt = "These three pictures go together. Which picture belongs with them?";
   return choice(
     {
@@ -1172,56 +1374,85 @@ interface Category {
   id: string;
   one: string;
   many: string;
-  members: [string, string][];
+  /** [emoji, label, ids of other categories this member ALSO fits (a duck is a farm animal too)] */
+  members: [string, string, string[]][];
   near: string[];
+  /** categories whose members ALSO fit this category's name (an eagle is a wild animal): never the odd one out against it */
+  clash: string[];
 }
 
-function cat(id: string, one: string, many: string, members: string, near: string[] = []): Category {
-  return { id, one, many, members: members.split("|").map((m) => [m.slice(0, m.indexOf(" ")), m.slice(m.indexOf(" ") + 1)] as [string, string]), near };
+/** members: "🐔 chicken@bird,farm|…" — the @ list names other categories the member also belongs to. */
+function cat(id: string, one: string, many: string, members: string, near: string[] = [], clash: string[] = []): Category {
+  return {
+    id,
+    one,
+    many,
+    members: members.split("|").map((m) => {
+      const [body, tags = ""] = m.split("@");
+      const sp = body.indexOf(" ");
+      return [body.slice(0, sp), body.slice(sp + 1), tags ? tags.split(",") : []] as [string, string, string[]];
+    }),
+    near,
+    clash,
+  };
 }
 
 const CATEGORIES: readonly Category[] = [
   cat("fruit", "a fruit", "fruits", "🍎 apple|🍌 banana|🍇 grapes|🍓 strawberry|🍉 watermelon|🍊 orange|🍐 pear|🍒 cherries", ["vegetable", "sweet"]),
   cat("vegetable", "a vegetable", "vegetables", "🥕 carrot|🥦 broccoli|🌽 corn|🥔 potato|🧅 onion|🥒 cucumber|🫑 pepper", ["fruit"]),
-  cat("farm", "a farm animal", "farm animals", "🐄 cow|🐖 pig|🐑 sheep|🐔 chicken|🐴 horse|🐐 goat|🦃 turkey", ["wild", "pet"]),
-  cat("wild", "a wild animal", "wild animals", "🦁 lion|🐘 elephant|🦒 giraffe|🐯 tiger|🦓 zebra|🐻 bear|🦘 kangaroo", ["farm", "pet"]),
-  cat("pet", "a pet", "pets", "🐶 dog|🐱 cat|🐹 hamster|🐰 rabbit|🐢 turtle|🐠 goldfish", ["farm", "wild"]),
+  cat("farm", "a farm animal", "farm animals", "🐄 cow|🐖 pig|🐑 sheep|🐔 chicken@bird|🐴 horse|🐐 goat|🦃 turkey@bird,wild", ["wild", "pet"]),
+  cat("wild", "a wild animal", "wild animals", "🦁 lion|🐘 elephant|🦒 giraffe|🐯 tiger|🦓 zebra|🐻 bear|🦘 kangaroo", ["farm", "pet"], ["bird", "sea", "insect"]),
+  cat("pet", "a pet", "pets", "🐶 dog@farm|🐱 cat@farm|🐹 hamster|🐰 rabbit@farm,wild|🐢 turtle@sea,wild|🐠 goldfish@sea", ["farm", "wild"]),
   cat("sea", "a sea animal", "sea animals", "🐙 octopus|🦀 crab|🐬 dolphin|🦈 shark|🐳 whale|🦞 lobster|🐡 blowfish", ["bird", "farm"]),
-  cat("bird", "a bird", "birds", "🦉 owl|🦅 eagle|🦆 duck|🐧 penguin|🦜 parrot|🦢 swan|🐦 robin", ["insect", "sea"]),
+  cat("bird", "a bird", "birds", "🦉 owl|🦅 eagle|🦆 duck@farm|🦩 flamingo|🦜 parrot@pet|🦢 swan|🐦 robin", ["insect", "sea"]),
   cat("insect", "an insect", "insects", "🐝 bee|🐞 ladybug|🦋 butterfly|🐜 ant|🦗 cricket|🪲 beetle", ["bird"]),
   cat("land", "a land vehicle", "land vehicles", "🚗 car|🚌 bus|🚲 bicycle|🚂 train|🏍️ motorcycle|🚜 tractor|🚒 fire truck", ["boat", "air"]),
   cat("boat", "a boat", "boats", "⛵ sailboat|🚢 ship|🛶 canoe|🚤 speedboat|⛴️ ferry", ["land"]),
-  cat("air", "something that flies", "things that fly in the sky", "✈️ airplane|🚁 helicopter|🚀 rocket|🎈 hot-air balloon|🛩️ small plane", ["land", "bird"]),
-  cat("clothes", "something you wear", "clothes", "👕 shirt|👖 pants|🧥 coat|🧢 cap|🧦 socks|👗 dress|🧤 mittens|👟 sneaker", ["kitchen"]),
-  cat("tool", "a tool", "tools", "🔨 hammer|🪚 saw|🔧 wrench|🪛 screwdriver|✂️ scissors|🪜 ladder", ["kitchen", "school"]),
-  cat("kitchen", "something from the kitchen", "kitchen things", "🍴 fork|🥄 spoon|🔪 knife|🍳 frying pan|🥣 bowl|☕ cup|🫖 teapot", ["tool", "furniture"]),
+  // "machines", not "things that fly": birds and insects fly too
+  cat("air", "a flying machine", "flying machines", "✈️ airplane|🚁 helicopter|🚀 rocket@space|🛩️ small plane", ["land", "bird"]),
+  cat("clothes", "something you wear", "clothes", "👕 shirt|👖 pants|🧥 coat|🧢 cap|🧦 socks|👗 dress|🧤 gloves|👟 sneaker", ["kitchen"]),
+  // "for building and fixing": a pencil or scissors is a tool in the loose sense
+  cat("tool", "a tool for building and fixing", "tools for building and fixing", "🔨 hammer|🪚 saw|🔧 wrench|🪛 screwdriver|🪜 ladder", ["kitchen", "school"]),
+  cat("kitchen", "something from the kitchen", "kitchen things", "🍴 fork|🥄 spoon|🍽️ plate|🍳 frying pan|🥣 bowl|☕ cup|🫖 teapot", ["tool", "furniture"]),
   cat("sport", "something for sports", "sports things", "⚽ soccer ball|🏀 basketball|⚾ baseball|🎾 tennis ball|🏈 football|🏐 volleyball|🏒 hockey stick", ["instrument"]),
-  cat("instrument", "a musical instrument", "musical instruments", "🎸 guitar|🥁 drum|🎺 trumpet|🎻 violin|🎹 piano|🪈 flute|🪗 accordion", ["sport", "tool"]),
-  cat("weather", "a kind of weather", "kinds of weather", "☀️ sun|🌧️ rain|⛈️ storm|🌨️ snow|🌈 rainbow|🌪️ tornado|☁️ cloud", ["space"]),
-  cat("space", "something in space", "things in space", "🌙 moon|⭐ star|🪐 planet|☄️ comet|🌍 Earth|🛰️ satellite", ["weather"]),
-  cat("school", "a school thing", "school things", "✏️ pencil|📚 books|🎒 backpack|📏 ruler|🖍️ crayon|📐 set square|🖊️ pen", ["tool"]),
-  cat("furniture", "a piece of furniture", "furniture", "🛏️ bed|🪑 chair|🛋️ couch|🗄️ cabinet|🪞 mirror", ["kitchen"]),
+  cat("instrument", "a musical instrument", "musical instruments", "🎸 guitar|🥁 drum|🎺 trumpet|🎻 violin|🎹 piano|🎷 saxophone|🪗 accordion", ["sport", "tool"]),
+  cat("weather", "a kind of weather", "kinds of weather", "🌧️ rain|⛈️ storm|🌨️ snow|🌈 rainbow|🌪️ tornado|☁️ cloud|⚡ lightning", ["space"]),
+  cat("space", "something in space", "things in space", "🌙 moon|⭐ star|🪐 planet|☄️ comet|🌍 Earth|☀️ sun@weather|🛰️ satellite@air", ["weather"]),
+  cat("school", "a school thing", "school things", "✏️ pencil|📚 books|🎒 backpack|📓 notebook|🖍️ crayon|📎 paper clip|🖊️ pen", ["tool"]),
+  cat("furniture", "a piece of furniture", "furniture", "🛏️ bed|🪑 chair|🛋️ couch|🗄️ cabinet", ["kitchen"]),
   cat("body", "a body part", "body parts", "👂 ear|👃 nose|👁️ eye|🦶 foot|✋ hand|🦷 tooth|👅 tongue"),
-  cat("sweet", "a sweet treat", "sweet treats", "🍪 cookie|🍩 donut|🍰 cake|🍭 lollipop|🍫 chocolate|🧁 cupcake|🍬 candy", ["fruit"]),
-  cat("flower", "a flower", "flowers", "🌹 rose|🌻 sunflower|🌷 tulip|🌼 daisy|🌺 hibiscus", ["vegetable"]),
+  // fruit is sweet too, so a fruit is never the odd one out among sweet treats
+  cat("sweet", "a sweet treat", "sweet treats", "🍪 cookie|🍩 donut|🍰 cake|🍭 lollipop|🍫 chocolate|🧁 cupcake|🍬 candy", ["fruit"], ["fruit"]),
+  cat("flower", "a flower", "flowers", "🌹 rose|🌻 sunflower|🌷 tulip|🌼 daisy", ["vegetable"]),
 ];
 
 const oddOneOut: Generator = (ctx) => {
   const { rng } = ctx;
   const l3 = isL3(ctx);
   const a = pick(rng, CATEGORIES);
-  const nearPool = CATEGORIES.filter((c) => c.id !== a.id && (a.near.includes(c.id) || c.near.includes(a.id)));
-  const farPool = CATEGORIES.filter((c) => c.id !== a.id && !a.near.includes(c.id) && !c.near.includes(a.id));
+  // b's odd member must not also be an `a`, and three `a` members must remain that are not also `b`s
+  const fitsA = (m: [string, string, string[]]) => m[2].includes(a.id);
+  const usable = (c: Category) => c.id !== a.id && !a.clash.includes(c.id) && c.members.some((m) => !fitsA(m)) && a.members.filter((m) => !m[2].includes(c.id)).length >= 3;
+  const isNear = (c: Category) => a.near.includes(c.id) || c.near.includes(a.id);
+  const nearPool = CATEGORIES.filter((c) => usable(c) && isNear(c));
+  const farPool = CATEGORIES.filter((c) => usable(c) && !isNear(c));
   const b = l3 && nearPool.length ? pick(rng, nearPool) : pick(rng, farPool.length ? farPool : nearPool);
-  const same = sample(rng, a.members, 3);
-  const odd = pick(rng, b.members);
+  const same = sample(
+    rng,
+    a.members.filter((m) => !m[2].includes(b.id)),
+    3
+  );
+  const odd = pick(
+    rng,
+    b.members.filter((m) => !fitsA(m))
+  );
   const built = assemble(rng, { emoji: odd[0], label: odd[1] }, same.map((m) => ({ emoji: m[0], label: m[1] })), 4);
   const prompt = "Which one does NOT belong with the others?";
   return choice(
     {
       prompt,
       display: { speak: speakFor(ctx, `${prompt} ${built.options.map((o) => o.label).join(", ")}.`) },
-      explain: `${cap(odd[1])} is ${b.one}. The other three are ${a.many}: ${same[0][1]}, ${same[1][1]} and ${same[2][1]}.`,
+      explain: `${cap(odd[1])} ${/s$/.test(odd[1]) && !/(us|ss)$/.test(odd[1]) ? "are" : "is"} ${b.one}. The other three are ${a.many}: ${same[0][1]}, ${same[1][1]} and ${same[2][1]}.`,
       hint: "Name each picture out loud. Three of them are the same KIND of thing. Which one is a different kind?",
     },
     built
@@ -1282,7 +1513,9 @@ const sudoku4: Generator = (ctx) => {
     for (let r = br; r < br + 2; r++) for (let c = bc; c < bc + 2; c++) if ((r !== tr || c !== tc) && !hidden(r, c)) box.push(sol[r][c]);
     return { row, col, box, all: new Set([...row, ...col, ...box]) };
   };
-  while (blanks.length > 0 && peers(blanks).all.size < 3) blanks = blanks.slice(0, -1);
+  // the row and column ALONE must pin the ? down: the grid is drawn without 2×2 box borders and the
+  // level-1 rule only mentions rows and columns
+  while (blanks.length > 0 && new Set([...peers(blanks).row, ...peers(blanks).col]).size < 3) blanks = blanks.slice(0, -1);
   const p = peers(blanks);
   const answer = sol[tr][tc];
   const grid = sol.map((row, r) => row.map((d, c) => (r === tr && c === tc ? "?" : blanks.some(([br, bc]) => br === r && bc === c) ? "" : syms[d - 1])));
@@ -1294,7 +1527,7 @@ const sudoku4: Generator = (ctx) => {
     {
       prompt,
       display: { grid, speak: speakFor(ctx, `${prompt} Every row and every column needs each ${thing} exactly once.`) },
-      explain: `Every row, every column and every 2×2 box must have ${syms.join(" ")} exactly once. The ?'s row already has ${list(p.row)}, its column has ${list(p.col)} and its box has ${list(p.box)}. The only one missing is ${name(answer)}.`,
+      explain: `${l3 ? "Every row, every column and every 2×2 box" : "Every row and every column"} must have ${syms.join(" ")} exactly once. The ?'s row already has ${list(p.row)} and its column has ${list(p.col)}. The only one missing from both is ${name(answer)}.`,
       hint: `Look along the ?'s row and down its column. Cross off every ${thing} you see there. Whatever is left over is the answer.`,
     },
     { options: syms.map((s) => (symbolsKind === "digits" ? { label: s } : { emoji: s })), answerIndex: answer - 1 }
@@ -1309,6 +1542,8 @@ const KID_NAMES = ["Ava", "Ben", "Cara", "Dev", "Ella", "Finn", "Gus", "Hana", "
 
 interface LogicTheme {
   items: [string, string][];
+  /** the premise: who is in the puzzle, which three things, one each and no two the same */
+  intro: (kids: readonly string[], items: readonly string[]) => string;
   has: (k: string, p: string) => string;
   hasNot: (k: string, p: string) => string;
   neither: (k1: string, k2: string, p: string) => string;
@@ -1320,6 +1555,7 @@ interface LogicTheme {
 const LOGIC_THEMES: readonly LogicTheme[] = [
   {
     items: [["🐶", "dog"], ["🐱", "cat"], ["🐟", "fish"], ["🐰", "rabbit"], ["🐹", "hamster"], ["🐢", "turtle"], ["🐦", "bird"]],
+    intro: (k, p) => `${k[0]}, ${k[1]} and ${k[2]} each have a different pet: the ${p[0]}, the ${p[1]} or the ${p[2]}.`,
     has: (k, p) => `${k} has the ${p}.`,
     hasNot: (k, p) => `${k} does not have the ${p}.`,
     neither: (k1, k2, p) => `Neither ${k1} nor ${k2} has the ${p}.`,
@@ -1329,21 +1565,23 @@ const LOGIC_THEMES: readonly LogicTheme[] = [
   },
   {
     items: [["🍎", "apple"], ["🍌", "banana"], ["🍇", "grapes"], ["🍓", "strawberry"], ["🍉", "watermelon"], ["🍊", "orange"]],
-    has: (k, p) => `${k}'s favorite fruit is the ${p}.`,
-    hasNot: (k, p) => `${k}'s favorite fruit is not the ${p}.`,
+    intro: (k, p) => `${k[0]}, ${k[1]} and ${k[2]} each picked a different fruit: the ${p[0]}, the ${p[1]} or the ${p[2]}.`,
+    has: (k, p) => `${k} picked the ${p}.`,
+    hasNot: (k, p) => `${k} did not pick the ${p}.`,
     neither: (k1, k2, p) => `Neither ${k1} nor ${k2} picked the ${p}.`,
-    ask: (k) => `Which fruit is ${k}'s favorite?`,
+    ask: (k) => `Which fruit did ${k} pick?`,
     the: (p) => `the ${p}`,
-    must: (k, p) => `${k}'s favorite must be the ${p}`,
+    must: (k, p) => `${k} must have picked the ${p}`,
   },
   {
     items: [["⚽", "soccer"], ["🏀", "basketball"], ["⚾", "baseball"], ["🎾", "tennis"], ["🏊", "swimming"], ["🥋", "karate"]],
-    has: (k, p) => `${k} does ${p}.`,
-    hasNot: (k, p) => `${k} does not do ${p}.`,
-    neither: (k1, k2, p) => `Neither ${k1} nor ${k2} does ${p}.`,
-    ask: (k) => `Which sport does ${k} do?`,
+    intro: (k, p) => `${k[0]}, ${k[1]} and ${k[2]} each picked a different sport: ${p[0]}, ${p[1]} or ${p[2]}.`,
+    has: (k, p) => `${k} picked ${p}.`,
+    hasNot: (k, p) => `${k} did not pick ${p}.`,
+    neither: (k1, k2, p) => `Neither ${k1} nor ${k2} picked ${p}.`,
+    ask: (k) => `Which sport did ${k} pick?`,
     the: (p) => p,
-    must: (k, p) => `${k} must do ${p}`,
+    must: (k, p) => `${k} must have picked ${p}`,
   },
 ];
 
@@ -1383,27 +1621,30 @@ const logicGrid: Generator = (ctx) => {
   if (l3) for (let p = 0; p < 3; p++) cands.push({ kind: "neither", kids: [0, 1, 2].filter((k) => perm[k] !== p), item: p });
   const pool = shuffle(rng, cands);
   let clues: Clue[] | null = null;
-  const maxPos = l3 ? 1 : 2;
-  outer: for (let i = 0; i < pool.length; i++)
-    for (let j = i + 1; j < pool.length; j++)
-      for (let k = j + 1; k < pool.length; k++) {
-        const set = [pool[i], pool[j], pool[k]];
-        if (set.filter((c) => c.kind === "pos").length > maxPos) continue;
-        if (set.some((c) => c.kind === "pos" && c.kids[0] === q)) continue;
-        if (set.some((c) => c.kind === "neither" && c.kids.includes(q) && set.some((d) => d !== c && d.kind === "neither" && d.kids.includes(q)))) continue;
-        const fits = PERMS3.filter((pp) => set.every((c) => clueHolds(c, pp)));
-        const everyClueMatters = set.every((c) => PERMS3.filter((pp) => set.filter((d) => d !== c).every((d) => clueHolds(d, pp))).length > fits.length);
-        if (fits.length === 1 && fits[0] === perm && everyClueMatters) {
-          clues = set;
-          break outer;
-        }
-      }
+  // level 1: two clues, one of them a plain "X has the …" (a 6-year-old can follow one elimination step);
+  // level 3: three clues, mostly "not" clues. Either way exactly one assignment fits and every clue is needed.
+  const sets: Clue[][] = [];
+  if (l3) {
+    for (let i = 0; i < pool.length; i++) for (let j = i + 1; j < pool.length; j++) for (let k = j + 1; k < pool.length; k++) sets.push([pool[i], pool[j], pool[k]]);
+  } else {
+    for (let i = 0; i < pool.length; i++) for (let j = 0; j < pool.length; j++) if (pool[i].kind === "pos" && pool[j].kind !== "pos") sets.push([pool[i], pool[j]]);
+  }
+  for (const set of sets) {
+    if (set.filter((c) => c.kind === "pos").length > 1) continue;
+    if (set.some((c) => c.kind === "pos" && c.kids[0] === q)) continue;
+    if (set.some((c) => c.kind === "neither" && c.kids.includes(q) && set.some((d) => d !== c && d.kind === "neither" && d.kids.includes(q)))) continue;
+    const fits = PERMS3.filter((pp) => set.every((c) => clueHolds(c, pp)));
+    const everyClueMatters = set.every((c) => PERMS3.filter((pp) => set.filter((d) => d !== c).every((d) => clueHolds(d, pp))).length > fits.length);
+    if (fits.length === 1 && fits[0] === perm && everyClueMatters) {
+      clues = set;
+      break;
+    }
+  }
   if (!clues) {
     const other = [0, 1, 2].filter((k) => k !== q);
     clues = [
       { kind: "pos", kids: [other[0]], item: perm[other[0]] },
       { kind: "neg", kids: [q], item: perm[other[1]] },
-      { kind: "neg", kids: [other[1]], item: perm[q] },
     ];
   }
   const clueText = (c: Clue) => {
@@ -1451,13 +1692,15 @@ const logicGrid: Generator = (ctx) => {
   }
   const answerItem = items[perm[q]];
   const built = assemble(rng, { emoji: answerItem[0], label: answerItem[1] }, items.filter((_, i) => i !== perm[q]).map((it) => ({ emoji: it[0], label: it[1] })), 3);
-  const prompt = `${clues.map((c, i) => `${i + 1}) ${clueText(c)}`).join("  ")}  ${theme.ask(kids[q])}`;
+  const prompt = `${theme.intro(kids, items.map((it) => it[1]))}  ${clues.map((c, i) => `${i + 1}) ${clueText(c)}`).join("  ")}  ${theme.ask(kids[q])}`;
   return choice(
     {
       prompt,
       display: { emoji: items.map((it) => it[0]).join("  "), speak: speakFor(ctx, prompt) },
       explain: `${steps.length ? steps.join(". ") + ". " : ""}So the answer is ${theme.the(answerItem[1])}.`,
-      hint: `Make a little chart: ${kids.join(", ")} across the top, ${items.map((it) => it[1]).join(", ")} down the side. Put an X for every "not". When a row or column has only one empty box left, that is the answer.`,
+      hint: l3
+        ? `Make a little chart: ${kids.join(", ")} across the top, ${items.map((it) => it[1]).join(", ")} down the side. Put an X for every "not". When a row or column has only one empty box left, that is the answer.`
+        : `Start with the clue that tells you for sure who has what. Nobody else can have that one. Then use the "not" clue.`,
     },
     built
   );

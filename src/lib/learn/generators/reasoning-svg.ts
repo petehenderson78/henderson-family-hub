@@ -29,7 +29,11 @@ export type ShapeName =
   | "oval";
 
 export interface ShapeInfo {
-  /** how many quarter turns before the shape looks the same again (1 = never changes, 2 = 180°, 4 = all four turns differ) */
+  /**
+   * how many quarter turns before the shape looks the same again (2 = 180°, 4 = all four turns differ).
+   * 1 = always drawn upright: either it looks the same after any quarter turn (square, circle) or a
+   * quarter turn would only tilt it slightly (star, pentagon: 5-fold), so it is never turned at all.
+   */
   period: 1 | 2 | 4;
   /** true when the mirror image cannot be made by turning (so a flip is always visible) */
   chiral: boolean;
@@ -51,7 +55,9 @@ export const SHAPE_INFO: Record<ShapeName, ShapeInfo> = {
   flag: { period: 4, chiral: true, curved: "no", word: "flag", plural: "flags", markup: '<path d="M26 12 h8 v76 h-8 z"/><path d="M34 16 l46 16 l-46 16 z"/>' },
   seven: { period: 4, chiral: true, curved: "no", word: "seven-shape", plural: "seven-shapes", markup: '<path d="M20 14 h60 v16 l-30 56 h-20 l30 -56 h-40 z"/>' },
   pee: { period: 4, chiral: true, curved: "mixed", word: "P-shape", plural: "P-shapes", markup: '<path d="M30 14 h30 a18 18 0 0 1 0 36 h-12 v36 h-18 z"/>' },
-  step: { period: 4, chiral: true, curved: "no", word: "staircase", plural: "staircases", markup: '<path d="M14 86 v-24 h24 v-24 h24 v-24 h24 v72 z"/>' },
+  // steps are wider (24) than tall (18): a square staircase is symmetric about its diagonal, so its
+  // mirror image would just be a quarter turn of it (not chiral)
+  step: { period: 4, chiral: true, curved: "no", word: "staircase", plural: "staircases", markup: '<path d="M14 77 v-18 h24 v-18 h24 v-18 h24 v54 z"/>' },
   square: { period: 1, chiral: false, curved: "no", word: "square", plural: "squares", markup: '<rect x="18" y="18" width="64" height="64"/>' },
   circle: { period: 1, chiral: false, curved: "yes", word: "circle", plural: "circles", markup: '<circle cx="50" cy="50" r="34"/>' },
   star: { period: 1, chiral: false, curved: "no", word: "star", plural: "stars", markup: '<polygon points="50,12 59.4,37.1 86.1,38.3 65.2,54.9 72.3,80.7 50,66 27.7,80.7 34.8,54.9 13.9,38.3 40.6,37.1"/>' },
@@ -86,7 +92,7 @@ export interface Figure {
   size: 0 | 1;
   /** copies drawn side by side */
   count: 1 | 2 | 3;
-  /** colour index */
+  /** color index */
   hue: 0 | 1 | 2;
 }
 
@@ -143,9 +149,11 @@ export function figureInner(f: Figure): string {
   const fill = f.fill === 2 ? color : f.fill === 1 ? HUE_TINT[f.hue] : "#ffffff";
   const sw = r2(Math.min(9, 5 / Math.sqrt(s)));
   const style = `fill="${fill}" stroke="${color}" stroke-width="${sw}" stroke-linejoin="round"`;
-  const flip = f.flip ? "-1" : "1";
+  const flip = f.flip && info.chiral ? "-1" : "1";
+  // period-1 shapes are always drawn upright, so the drawing matches figureKey (which ignores their rot)
+  const rot = info.period === 1 ? 0 : ((f.rot % 4) + 4) % 4;
   return COUNT_X[f.count]
-    .map((x) => `<g transform="translate(${x} 50) scale(${s}) rotate(${(f.rot % 4) * 90}) scale(${flip} 1) translate(-50 -50)" ${style}>${info.markup}</g>`)
+    .map((x) => `<g transform="translate(${x} 50) scale(${s}) rotate(${rot * 90}) scale(${flip} 1) translate(-50 -50)" ${style}>${info.markup}</g>`)
     .join("");
 }
 
@@ -183,7 +191,7 @@ export function matrixSvg(cells: readonly (Figure | null)[], n: number): string 
   return svgWrap(parts.join(""));
 }
 
-/** A horizontal row of figures (null = "?"), square cells, vertically centred. */
+/** A horizontal row of figures (null = "?"), square cells, vertically centered. */
 export function rowSvg(cells: readonly (Figure | null)[], boxed = true): string {
   const k = Math.max(1, cells.length);
   const w = 100 / k;
