@@ -1,9 +1,9 @@
 /**
  * Skill catalog.
  *
- * HOW TO EXTEND (content agents): append `Skill` objects to CATALOG below (or
- * split into per-subject arrays and spread them in). Keep the shape exactly as
- * `Skill` in ./types. Every `generator` id must exist in
+ * HOW TO EXTEND (content agents): add `Skill` objects to a per-subject array
+ * (catalog-math.ts, catalog-reading-cole.ts, catalog-reasoning.ts, …) and
+ * spread it into CATALOG below. Keep the shape exactly as `Skill` in ./types. Every `generator` id must exist in
  * ./generators/index.ts (`generators` record). Order the array so prereqs come
  * before dependents — the mission planner uses array order to break grade ties
  * and the map renders in array order.
@@ -14,6 +14,9 @@
  */
 
 import type { Skill, Subject } from "./types";
+import { MATH_SKILLS } from "./catalog-math";
+import { COLE_READING_SKILLS } from "./catalog-reading-cole";
+import { REASONING_SKILLS } from "./catalog-reasoning";
 
 export const TRACK_LEVEL: Record<string, number> = { lily: 1, cole: 3 };
 
@@ -36,98 +39,12 @@ export const SUBJECT_EMOJI: Record<Subject, string> = {
 export const SUBJECT_ORDER: readonly Subject[] = ["math", "phonics", "reading", "writing", "reasoning"];
 
 export const CATALOG: Skill[] = [
-  // ---- Lily: grade 1 math -------------------------------------------------
-  {
-    id: "m1.count.next",
-    subject: "math",
-    grade: 1,
-    title: "Counting on to 120 (what comes next)",
-    kidTitle: "Number Train",
-    standards: ["1.NBT.A.1"],
-    prereqs: [],
-    generator: "countNext",
-    params: { max: 120 },
-    estMinutes: 10,
-    testOut: true,
-    parentTip: "Have her say the three numbers out loud, then keep going. Point at the tens when she crosses 29→30, 39→40.",
-    track: "lily",
-  },
-  {
-    id: "m1.add.within10",
-    subject: "math",
-    grade: 1,
-    title: "Addition within 10 (ten frame)",
-    kidTitle: "Ten-Frame Adder",
-    standards: ["1.OA.C.6", "K.OA.A.5"],
-    prereqs: ["m1.count.next"],
-    generator: "addWithin10",
-    params: { max: 10 },
-    estMinutes: 12,
-    testOut: true,
-    parentTip: "Say 'start at the bigger number and count on'. Use fingers or the dots in the frame.",
-    track: "lily",
-  },
-
-  // ---- Cole: multiplication chain -----------------------------------------
-  {
-    id: "m4.mult.facts",
-    subject: "math",
-    grade: 3,
-    title: "Multiplication facts 0–12",
-    kidTitle: "Times-Table Blaster",
-    standards: ["3.OA.C.7"],
-    prereqs: [],
-    generator: "multFacts",
-    params: { min: 0, max: 12 },
-    estMinutes: 10,
-    testOut: true,
-    parentTip: "Aim for 3-second recall. For stuck facts, use the turn-around fact (7×8 = 8×7) or build from a known one (7×8 = 7×7 + 7).",
-    track: "cole",
-  },
-  {
-    id: "m4.mult.2x1",
-    subject: "math",
-    grade: 4,
-    title: "Multiply 2-digit by 1-digit",
-    kidTitle: "Big Number Multiplier",
-    standards: ["4.NBT.B.5"],
-    prereqs: ["m4.mult.facts"],
-    generator: "mult2x1",
-    estMinutes: 12,
-    testOut: true,
-    parentTip: "Have him split the 2-digit number into tens and ones (23 × 4 = 20×4 + 3×4) and say both partial products before adding.",
-    track: "cole",
-  },
-
-  // ---- Both: reasoning (level is injected per track) ----------------------
-  {
-    id: "r.number.series",
-    subject: "reasoning",
-    grade: 1,
-    title: "Number series (what comes next)",
-    kidTitle: "Pattern Detective",
-    standards: ["MP.7", "MP.8"],
-    prereqs: [],
-    generator: "numberSeries",
-    estMinutes: 6,
-    testOut: false,
-    parentTip: "Ask 'what changed from this number to the next one?' Have them check the rule on every step before choosing.",
-    track: "both",
-  },
-  {
-    id: "r.figure.matrix",
-    subject: "reasoning",
-    grade: 1,
-    title: "Figure matrix (2×2 picture rules)",
-    kidTitle: "Shape Puzzle",
-    standards: ["MP.7"],
-    prereqs: [],
-    generator: "figureMatrix",
-    estMinutes: 6,
-    testOut: false,
-    parentTip: "Say the rule out loud: 'Across, it turns. Down, it changes shape.' Then do the same to the bottom-left picture.",
-    track: "both",
-  },
+  // Math (grades 1-2 Lily; grades 3-5 Cole) — ./catalog-math.ts
+  ...MATH_SKILLS,
+  // Reading / writing (Cole) — ./catalog-reading-cole.ts
+  ...COLE_READING_SKILLS,
+  // Reasoning ("Brain"), per-learner levels — ./catalog-reasoning.ts
+  ...REASONING_SKILLS,
 ];
 
 /** The learner's tree (track === slug or "both"), with reasoning level injected for shared skills. */

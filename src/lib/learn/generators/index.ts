@@ -7,14 +7,29 @@
  * refers to these ids. Keep every generator pure (ctx.rng only), with
  * relative imports and `import type`, so `npm run selfcheck` can run them in
  * plain Node.
+ *
+ * Files: math-early (grades 1-2), math-upper / math-upper-frac /
+ * math-upper-geo (grades 3-5), reasoning, reading, writing.
  */
 
 import type { Generator, Question, Skill } from "../types";
 import { mulberry32 } from "../rng";
-import { generators as starter } from "./starter";
+import { generators as mathEarly } from "./math-early";
+import { generators as mathUpper } from "./math-upper";
+import { generators as mathUpperFrac } from "./math-upper-frac";
+import { generators as mathUpperGeo } from "./math-upper-geo";
+import { generators as reasoning } from "./reasoning";
+import { generators as reading } from "./reading";
+import { generators as writing } from "./writing";
 
 export const generators: Record<string, Generator> = {
-  ...starter,
+  ...mathEarly,
+  ...mathUpper,
+  ...mathUpperFrac,
+  ...mathUpperGeo,
+  ...reasoning,
+  ...reading,
+  ...writing,
 };
 
 export function getGenerator(id: string): Generator | undefined {

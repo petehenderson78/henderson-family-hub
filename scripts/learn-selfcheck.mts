@@ -187,6 +187,7 @@ for (const id of generatorIds) {
     const where = `generator ${id} (level ${level})`;
     const answers = new Set<string>();
     const prompts = new Set<string>();
+    let selfCheckTextOnly = true;
     const positionCounts = new Map<number, number>();
     let positionSamples = 0;
     let leaks = 0;
@@ -207,7 +208,10 @@ for (const id of generatorIds) {
       assert(!hasBadString(q.prompt), tag, `prompt contains NaN/undefined: ${q.prompt}`);
       assert(!hasBadString(q.explain), tag, `explain contains NaN/undefined: ${q.explain}`);
       assert(!hasBadString(q.hint), tag, `hint contains NaN/undefined: ${q.hint}`);
-      assert(!/\bwrong\b/i.test(q.explain) && !/\bwrong\b/i.test(q.hint), tag, 'explain/hint must not say "wrong" (use "not yet")');
+      // Tone rule: feedback never tells the child THEY are wrong ("you're wrong", "that's wrong",
+      // "wrong answer!"). Narrative uses ("the wrong key", "rules out a wrong option") are fine.
+      const shaming = /\b(you(?:'re| are| were| got (?:it|that))|that(?:'s| is| was)|this(?:'s| is| was)|your answer(?: is| was)?|answer is)\s+wrong\b|\bwrong\s*!/i;
+      assert(!shaming.test(q.explain) && !shaming.test(q.hint), tag, 'explain/hint must not tell the child they are wrong (use "not yet")');
       if (q.display?.svg) {
         assert(svgTagsBalanced(q.display.svg), tag, "display svg tags not balanced");
         assert(!hasBadString(q.display.svg), tag, "display svg contains NaN/undefined");
@@ -289,10 +293,16 @@ for (const id of generatorIds) {
       } else {
         fail(tag, `unknown question type ${(q as { type: string }).type}`);
       }
-      prompts.add(q.prompt + (q.display?.svg ?? ""));
+      // Variety key: everything the child actually sees (prompt, picture, grid, emoji, speech, options).
+      const seenOptions = q.type === "choice" ? q.options.map((o) => o.label ?? o.emoji ?? o.svg ?? "").join("|") : q.type === "tiles" ? q.tiles.join("|") : "";
+      const seenGrid = q.display?.grid ? q.display.grid.map((r) => r.join(",")).join(";") : "";
+      prompts.add(q.prompt + (q.display?.svg ?? "") + (q.display?.emoji ?? "") + (q.display?.speak ?? "") + seenGrid + seenOptions);
+      if (!(q.type === "text" && q.selfCheck === true)) selfCheckTextOnly = false;
     }
     assert(answers.size > 1, where, `all ${QUESTIONS_PER_GENERATOR} answers identical`);
-    assert(prompts.size > QUESTIONS_PER_GENERATOR / 10, where, `low variety: only ${prompts.size} distinct prompts`);
+    // Authored self-check writing prompts are a finite bank (16 prompts); everything else must vary widely.
+    const varietyFloor = selfCheckTextOnly ? 10 : QUESTIONS_PER_GENERATOR / 10;
+    assert(prompts.size > varietyFloor, where, `low variety: only ${prompts.size} distinct prompts`);
     if (leaks > 0 && KNOWN_ANSWER_LEAKS[id]) {
       checks += 1;
       warnings.push(`${where}: ${leaks}/${QUESTIONS_PER_GENERATOR} items leak the answer (known, ${KNOWN_ANSWER_LEAKS[id]}) — e.g. ${leakExample}`);
