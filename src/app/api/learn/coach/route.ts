@@ -4,7 +4,8 @@
  *
  * Request (POST, JSON): CoachRequestBody from src/lib/learn/coach-types.ts
  *   { slug, action: "hint"|"explain"|"cheer"|"passage"|"feedback",
- *     skillTitle?, question?: { prompt, options?, correctAnswer, childAnswer?, passage?, guidance? },
+ *     skillTitle? (control chars stripped, capped at 120 chars),
+ *     question?: { prompt, options?, correctAnswer, childAnswer?, passage?, guidance? },
  *     childText?, level? }
  * Responses:
  *   200 { text }            hint / explain / cheer / feedback
@@ -20,7 +21,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { loadLearnerBySlugServer } from "@/lib/learn/server";
-import { askCoach, coachEnabled } from "@/lib/learn/coach";
+import { askCoach, cleanSkillTitle, coachEnabled } from "@/lib/learn/coach";
 import { COACH_ACTIONS, type CoachAction, type CoachLogMessage, type CoachQuestion, type CoachRequestBody } from "@/lib/learn/coach-types";
 
 export const dynamic = "force-dynamic";
@@ -38,11 +39,19 @@ const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const LOG_DEFAULT = 50;
 const LOG_MAX = 100;
 
-/** Per-process call timestamps per learner slug (resets on redeploy; that's fine). */
+/**
+ * Per-process call timestamps per learner slug (resets on redeploy; that's fine).
+ * Bounded: keys are only added after the slug resolved to a real learner, each
+ * list holds at most RATE_LIMIT_CALLS in-window timestamps, and learners with
+ * no call inside the window are pruned on every check.
+ */
 const recentCalls = new Map<string, number[]>();
 
 function allowCall(slug: string, now = Date.now()): boolean {
   const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  for (const [key, times] of recentCalls) {
+    if (times.length === 0 || times[times.length - 1] <= cutoff) recentCalls.delete(key);
+  }
   const calls = (recentCalls.get(slug) ?? []).filter((t) => t > cutoff);
   if (calls.length >= RATE_LIMIT_CALLS) {
     recentCalls.set(slug, calls);
@@ -115,8 +124,11 @@ function validateBody(body: unknown): Validated {
     return { ok: false, detail: "unknown action" };
   }
 
-  const skillTitle = optText(body.skillTitle, MAX_TEXT);
-  if (skillTitle === null) return { ok: false, detail: "skillTitle too long" };
+  // Hard reject absurd sizes; otherwise strip control characters and cap at
+  // MAX_SKILL_TITLE (kid titles are ~25 chars) so it is safe to log and prompt.
+  const rawSkillTitle = optText(body.skillTitle, MAX_TEXT);
+  if (rawSkillTitle === null) return { ok: false, detail: "skillTitle too long" };
+  const skillTitle = cleanSkillTitle(rawSkillTitle);
 
   const childText = optText(body.childText, MAX_CHILD_TEXT);
   if (childText === null) return { ok: false, detail: "childText must be a string of at most 1500 characters" };

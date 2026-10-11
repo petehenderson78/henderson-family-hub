@@ -33,6 +33,7 @@ export interface CoachLearner {
 export interface CoachInput {
   learner: CoachLearner;
   action: CoachAction;
+  /** untrusted label; askCoach strips control characters, caps it at 120 chars and delimits it */
   skillTitle?: string;
   question?: CoachQuestion;
   /** the child's writing (feedback) or the app's progress note (cheer) */
