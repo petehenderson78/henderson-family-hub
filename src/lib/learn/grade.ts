@@ -30,6 +30,18 @@ export function gradeAnswer(question: Question, raw: string): boolean {
       const idx = Number(raw);
       return Number.isInteger(idx) && idx === question.answerIndex;
     }
+    case "tiles": {
+      // raw = the tiles placed in the slots, joined without separators
+      const got = raw.replace(/\s+/g, "").toLowerCase();
+      if (!got) return false;
+      if (got === question.answer.replace(/\s+/g, "").toLowerCase()) return true;
+      return (question.accept ?? []).some((a) => a.replace(/\s+/g, "").toLowerCase() === got);
+    }
+    case "tap": {
+      // raw = number of cells the child selected (excluding fixed cells)
+      const n = Number(raw);
+      return Number.isInteger(n) && n === question.answer;
+    }
     default:
       return false;
   }
@@ -46,6 +58,10 @@ export function answerText(question: Question): string {
       const opt = question.options[question.answerIndex];
       return opt?.label ?? opt?.emoji ?? "the highlighted one";
     }
+    case "tiles":
+      return question.answer;
+    case "tap":
+      return String(question.answer);
     default:
       return "";
   }

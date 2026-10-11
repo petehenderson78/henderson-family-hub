@@ -97,7 +97,39 @@ export interface ChoiceQuestion {
   hint: string;
 }
 
-export type Question = NumericQuestion | TextQuestion | ChoiceQuestion;
+/** Arrange letter/number tiles into slots (word building, number building). Never a free-text keyboard. */
+export interface TilesQuestion {
+  type: "tiles";
+  prompt: string;
+  /** Tiles offered to the child, already shuffled by the generator; may include 1-2 distractors. */
+  tiles: string[];
+  /** Number of answer slots. */
+  slots: number;
+  /** Correct sequence joined without separators, e.g. "ship" or "34". */
+  answer: string;
+  accept?: string[];
+  display?: QuestionDisplay;
+  explain: string;
+  hint: string;
+}
+
+/** Tap cells in a grid to show a quantity (ten frame, array, fraction bar, hundred grid). */
+export interface TapQuestion {
+  type: "tap";
+  prompt: string;
+  rows: number;
+  cols: number;
+  /** Cell indexes (row-major) pre-filled and not toggleable, e.g. counters already placed. */
+  fixed?: number[];
+  /** Correct number of selected cells (position-independent). */
+  answer: number;
+  variant?: "ten-frame" | "array" | "fraction-bar" | "hundred-grid" | "plain";
+  display?: QuestionDisplay;
+  explain: string;
+  hint: string;
+}
+
+export type Question = NumericQuestion | TextQuestion | ChoiceQuestion | TilesQuestion | TapQuestion;
 
 export interface GeneratorContext {
   /** seeded, returns [0, 1) */
