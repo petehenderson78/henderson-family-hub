@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { Event, ExternalEvent } from "@/lib/types";
@@ -18,14 +18,24 @@ interface DashboardViewProps {
   firstName: string;
   todayEvents: Event[];
   monthTotal: number;
+  /** false for a child's login: no spending card, no Add Expense link (the server sends monthTotal 0) */
+  showFinances?: boolean;
   userId: string;
   learning?: LearningSummary[];
+  /** replaces the empty-state line of the Learning card (Learn not set up / unreachable) */
+  learningNote?: string;
   /** parents → /learn/tonight, kids → their own Mission Control */
   learnHref?: string;
   learnTitle?: string;
 }
 
 const KID_EMOJI: Record<string, string> = { cole: "🚀", lily: "🌈" };
+
+// false while rendering on the server and hydrating, true on the client afterwards
+// (time-of-day text must not differ between the two).
+const noSubscription = () => () => {};
+const onClient = () => true;
+const onServer = () => false;
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-US", {
@@ -45,58 +55,66 @@ function toLocalDateStr(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+/** Events from the subscribed ICS feeds; null when there are no feeds or the read failed (best-effort). */
+async function fetchFeedEvents(supabase: ReturnType<typeof createClient>): Promise<ExternalEvent[] | null> {
+  const { data: feeds } = await supabase
+    .from("calendar_feeds")
+    .select("*")
+    .order("created_at", { ascending: true });
+
+  if (!feeds || feeds.length === 0) return null;
+
+  try {
+    const results = await Promise.all(
+      feeds.map(async (feed) => {
+        try {
+          const res = await fetch(
+            `/api/calendar/feeds/sync?url=${encodeURIComponent(feed.url)}`
+          );
+          if (!res.ok) return [];
+          const data = await res.json();
+          return (data.events ?? []).map(
+            (evt: { id: string; title: string; description: string | null; location: string | null; start_date: string; end_date: string }) => ({
+              ...evt,
+              source: feed.name,
+              sourceColor: feed.color,
+              is_external: true as const,
+            })
+          );
+        } catch {
+          return [];
+        }
+      })
+    );
+    return results.flat();
+  } catch {
+    return null; // best-effort
+  }
+}
+
 export default function DashboardView({
   firstName,
   todayEvents,
   monthTotal,
+  showFinances = true,
   learning = [],
+  learningNote,
   learnHref = "/learn",
   learnTitle = "Today's missions",
 }: DashboardViewProps) {
   const supabase = createClient();
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(noSubscription, onClient, onServer);
   const [externalEvents, setExternalEvents] = useState<ExternalEvent[]>([]);
 
-  const syncFeeds = useCallback(async () => {
-    const { data: feeds } = await supabase
-      .from("calendar_feeds")
-      .select("*")
-      .order("created_at", { ascending: true });
-
-    if (!feeds || feeds.length === 0) return;
-
-    try {
-      const results = await Promise.all(
-        feeds.map(async (feed) => {
-          try {
-            const res = await fetch(
-              `/api/calendar/feeds/sync?url=${encodeURIComponent(feed.url)}`
-            );
-            if (!res.ok) return [];
-            const data = await res.json();
-            return (data.events ?? []).map(
-              (evt: { id: string; title: string; description: string | null; location: string | null; start_date: string; end_date: string }) => ({
-                ...evt,
-                source: feed.name,
-                sourceColor: feed.color,
-                is_external: true as const,
-              })
-            );
-          } catch {
-            return [];
-          }
-        })
-      );
-      setExternalEvents(results.flat());
-    } catch {
-      // best-effort
-    }
-  }, [supabase]);
-
   useEffect(() => {
-    setMounted(true);
-    syncFeeds();
-  }, [syncFeeds]);
+    let alive = true;
+    fetchFeedEvents(supabase).then((events) => {
+      if (alive && events) setExternalEvents(events);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [supabase]);
 
   // Filter to only events that are actually today in the user's local timezone
   const todayStr = toLocalDateStr(new Date());
@@ -135,7 +153,7 @@ export default function DashboardView({
 
         {/* Summary Cards */}
         <div className="mt-7 grid grid-cols-2 gap-3">
-          <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+          <div className={`rounded-2xl border border-slate-100 bg-white p-5 shadow-sm ${showFinances ? "" : "col-span-2"}`}>
             <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
@@ -150,19 +168,21 @@ export default function DashboardView({
             </p>
             <p className="mt-0.5 text-xs text-slate-400">events</p>
           </div>
-          <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-            <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="1" x2="12" y2="23" />
-                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-              </svg>
+          {showFinances && (
+            <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="1" x2="12" y2="23" />
+                  <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                </svg>
+              </div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Spent</p>
+              <p className="mt-1 text-3xl font-bold text-slate-900" suppressHydrationWarning>
+                {mounted ? formatCurrency(monthTotal) : "\u00A0"}
+              </p>
+              <p className="mt-0.5 text-xs text-slate-400">this month</p>
             </div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Spent</p>
-            <p className="mt-1 text-3xl font-bold text-slate-900" suppressHydrationWarning>
-              {mounted ? formatCurrency(monthTotal) : "\u00A0"}
-            </p>
-            <p className="mt-0.5 text-xs text-slate-400">this month</p>
-          </div>
+          )}
         </div>
 
         {/* Learning */}
@@ -187,7 +207,7 @@ export default function DashboardView({
             <span className="text-slate-300">→</span>
           </div>
           {learning.length === 0 ? (
-            <p className="mt-3 text-xs text-slate-400">Set up the Learn module to see Cole and Lily here.</p>
+            <p className="mt-3 text-xs text-slate-400">{learningNote ?? "Set up the Learn module to see Cole and Lily here."}</p>
           ) : (
             <ul className="mt-4 space-y-2">
               {learning.map((kid) => (
@@ -264,7 +284,7 @@ export default function DashboardView({
         <div className="mt-9 grid grid-cols-2 gap-3">
           <Link
             href="/calendar"
-            className="flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 active:scale-[0.98] active:shadow-md"
+            className={`${showFinances ? "" : "col-span-2 "}flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 active:scale-[0.98] active:shadow-md`}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" />
@@ -272,16 +292,18 @@ export default function DashboardView({
             </svg>
             Add Event
           </Link>
-          <Link
-            href="/budget"
-            className="flex min-h-[56px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 shadow-sm active:scale-[0.98] active:bg-slate-50"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            Add Expense
-          </Link>
+          {showFinances && (
+            <Link
+              href="/budget"
+              className="flex min-h-[56px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 shadow-sm active:scale-[0.98] active:bg-slate-50"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              Add Expense
+            </Link>
+          )}
         </div>
       </div>
     </div>

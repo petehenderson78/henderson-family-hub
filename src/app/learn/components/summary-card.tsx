@@ -1,8 +1,12 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import type { SkillStatus } from "@/lib/learn/types";
+import { DROPPED_MESSAGE, type SaveState } from "./use-write-queue";
+
+/** How long the primary waits for the saves before a "Continue anyway" link appears. */
+const CONTINUE_ANYWAY_MS = 10_000;
 
 export interface MasteryChange {
   kidTitle: string;
@@ -28,6 +32,13 @@ interface SummaryCardProps {
   note?: string;
   /** extra content under the mastery changes (e.g. Lily's pony names) */
   extra?: ReactNode;
+  /**
+   * The block's writes (persistent queue). While they are "saving" / "failed" the
+   * primary waits ("Saving…" / "Retry saving"); after 10 s a "Continue anyway" link
+   * leads on and the queue keeps retrying in the background. "dropped" (refused for
+   * good) shows a calm note and lets the child go on.
+   */
+  save?: { state: SaveState; onRetry: () => void };
 }
 
 const CONFETTI_COLORS = ["#3b82f6", "#6366f1", "#f59e0b", "#10b981", "#ec4899", "#8b5cf6"];
@@ -53,8 +64,16 @@ export default function SummaryCard({
   secondary,
   note,
   extra,
+  save,
 }: SummaryCardProps) {
   const pct = total > 0 ? Math.round((100 * correct) / total) : 0;
+  const waiting = !!save && (save.state === "saving" || save.state === "failed");
+  const [waitedLong, setWaitedLong] = useState(false);
+  useEffect(() => {
+    if (!waiting) return;
+    const id = window.setTimeout(() => setWaitedLong(true), CONTINUE_ANYWAY_MS);
+    return () => window.clearTimeout(id);
+  }, [waiting]);
   return (
     <div className="relative overflow-hidden rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
       {confetti && (
@@ -127,12 +146,40 @@ export default function SummaryCard({
 
         {extra}
 
-        <Link
-          href={primary.href}
-          className="mt-6 flex min-h-[60px] items-center justify-center rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-lg font-bold text-white shadow-lg shadow-blue-500/25 active:scale-[0.98]"
-        >
-          {primary.label}
-        </Link>
+        {save && (
+          <p
+            role="status"
+            aria-live="polite"
+            className={`mt-5 text-sm font-semibold ${save.state === "saved" ? "text-emerald-700" : save.state === "saving" ? "text-slate-500" : "text-amber-700"}`}
+          >
+            {save.state === "saved" ? "✓ Saved" : save.state === "failed" ? "Not saved yet — will retry" : save.state === "dropped" ? DROPPED_MESSAGE : "Saving…"}
+          </p>
+        )}
+
+        {waiting ? (
+          <>
+            <button
+              type="button"
+              disabled={save?.state !== "failed"}
+              onClick={save?.onRetry}
+              className="mt-3 flex min-h-[60px] w-full items-center justify-center rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-lg font-bold text-white shadow-lg shadow-blue-500/25 active:scale-[0.98] disabled:opacity-60"
+            >
+              {save?.state === "failed" ? "Retry saving" : "Saving…"}
+            </button>
+            {waitedLong && (
+              <Link href={primary.href} className="mt-2 flex min-h-[48px] items-center justify-center rounded-2xl text-sm font-semibold text-indigo-600">
+                Continue anyway — it keeps trying
+              </Link>
+            )}
+          </>
+        ) : (
+          <Link
+            href={primary.href}
+            className={`${save ? "mt-3" : "mt-6"} flex min-h-[60px] items-center justify-center rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-lg font-bold text-white shadow-lg shadow-blue-500/25 active:scale-[0.98]`}
+          >
+            {primary.label}
+          </Link>
+        )}
         {secondary && (
           <Link href={secondary.href} className="mt-3 flex min-h-[48px] items-center justify-center rounded-2xl text-sm font-semibold text-slate-500">
             {secondary.label}

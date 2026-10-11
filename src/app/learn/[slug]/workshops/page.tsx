@@ -1,8 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound, redirect } from "next/navigation";
-import { loadLearnerBySlugServer, loadWeekRewardsServer } from "@/lib/learn/server";
+import { kidSlugForLoginServer, learnLoadErrorPage, loadLearnerServer, loadWeekRewardsServer } from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
-import { kidSlugForEmail, weekPoints } from "@/lib/learn/stats";
+import { weekPoints } from "@/lib/learn/stats";
 import WorkshopsView from "./workshops-view";
 
 export const dynamic = "force-dynamic";
@@ -18,14 +18,31 @@ export default async function WorkshopsPage({ params }: { params: Promise<{ slug
   }
 
   const { slug } = await params;
-  const kidSlug = kidSlugForEmail(user.email);
+  const here = `/learn/${encodeURIComponent(slug)}/workshops`;
+  let kidSlug: string | null;
+  try {
+    kidSlug = await kidSlugForLoginServer(user.email);
+  } catch (e) {
+    return learnLoadErrorPage(e, here);
+  }
   if (kidSlug && kidSlug !== slug) redirect(`/learn/${kidSlug}/workshops`);
-  const learner = await loadLearnerBySlugServer(slug);
-  if (!learner) notFound();
 
   // Workshops marked done this family week (Mon-Sun): "pt:workshop:<id>" (and legacy "workshop:<id>" XP rows).
+  // A failed read would show done workshops as open and invite a second award: retry card instead.
   const today = todayInFamilyTz();
-  const rewards = await loadWeekRewardsServer(learner.id, today);
+  const load = async () => {
+    const learner = await loadLearnerServer(slug);
+    if (!learner) return null;
+    return { learner, rewards: await loadWeekRewardsServer(learner.id, today) };
+  };
+  let loaded: Awaited<ReturnType<typeof load>>;
+  try {
+    loaded = await load();
+  } catch (e) {
+    return learnLoadErrorPage(e, here);
+  }
+  if (!loaded) notFound();
+  const { learner, rewards } = loaded;
   const doneIds = rewards
     .map((r) => /^(?:pt:)?workshop:(.+)$/.exec(r.reason)?.[1])
     .filter((id): id is string => !!id);

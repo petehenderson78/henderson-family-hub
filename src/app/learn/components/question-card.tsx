@@ -13,8 +13,8 @@ interface QuestionCardProps {
   /** set once the child has answered — locks inputs and highlights the result */
   answered?: { raw: string; correct: boolean } | null;
   onSubmit: (raw: string) => void;
-  /** writing prompts (`selfCheck`): the child grades themselves against the model answer */
-  onSelfCheck?: (correct: boolean) => void;
+  /** writing prompts (`selfCheck`): the child grades themselves against the model answer; `text` is what they wrote */
+  onSelfCheck?: (correct: boolean, text: string) => void;
   /** 1-based question number and total, for the header */
   index: number;
   total: number;
@@ -40,6 +40,40 @@ interface QuestionCardProps {
 
 function isWordLabel(label: string | undefined): label is string {
   return !!label && !/^[-\d.,\s/×÷+=%$¢:]+$/.test(label);
+}
+
+/**
+ * Option layout that keeps every word inside its button at 375px. A two-column
+ * option with the 48px speaker column leaves ~72px for the label, a one-column
+ * option ~229px. Bold system-font text needs about 0.6em per letter, so the
+ * label steps its size down until the longest word fits; when even the smallest
+ * size does not fit two columns, the options go one per row. Labels also wrap
+ * anywhere as a last resort, so nothing can spill out of a button.
+ */
+const LABEL_SIZES: Record<"big" | "normal", readonly (readonly [px: number, cls: string])[]> = {
+  big: [
+    [24, "text-2xl"],
+    [20, "text-xl"],
+    [18, "text-lg"],
+  ],
+  normal: [
+    [20, "text-xl"],
+    [18, "text-lg"],
+    [16, "text-base"],
+  ],
+};
+const TWO_COL_LABEL_PX = 72;
+const ONE_COL_LABEL_PX = 229;
+const EM_PER_LETTER = 0.6;
+
+function optionLayout(labels: (string | undefined)[], bigText: boolean): { columns: 1 | 2; labelClass: string } {
+  const sizes = LABEL_SIZES[bigText ? "big" : "normal"];
+  const longest = Math.max(0, ...labels.filter(isWordLabel).flatMap((l) => l.split(/\s+/)).map((w) => w.length));
+  const fits = (px: number, width: number) => longest * px * EM_PER_LETTER <= width;
+  const two = sizes.find(([px]) => fits(px, TWO_COL_LABEL_PX));
+  if (two) return { columns: 2, labelClass: two[1] };
+  const one = sizes.find(([px]) => fits(px, ONE_COL_LABEL_PX)) ?? sizes[sizes.length - 1];
+  return { columns: 1, labelClass: one[1] };
 }
 
 /**
@@ -96,6 +130,7 @@ export default function QuestionCard({
   const [modelShown, setModelShown] = useState(false);
   const locked = !!answered;
   const speakText = question.display?.speak ?? question.prompt;
+  const layout = question.type === "choice" ? optionLayout(question.options.map((o) => o.label), bigText) : null;
   // A 4×4 grid is a sudoku: thicker lines between rows 2/3 and columns 2/3 mark the 2×2 boxes.
   const grid = question.display?.grid;
   const sudoku4 = !!grid && grid.length === 4 && grid.every((row) => row.length === 4);
@@ -266,14 +301,14 @@ export default function QuestionCard({
                       <div className="mt-3 grid grid-cols-2 gap-2">
                         <button
                           type="button"
-                          onClick={() => onSelfCheck?.(true)}
+                          onClick={() => onSelfCheck?.(true, value)}
                           className="min-h-[56px] rounded-2xl bg-emerald-500 text-base font-bold text-white shadow-sm"
                         >
                           Mine is close ✅
                         </button>
                         <button
                           type="button"
-                          onClick={() => onSelfCheck?.(false)}
+                          onClick={() => onSelfCheck?.(false, value)}
                           className="min-h-[56px] rounded-2xl border border-slate-200 bg-white text-base font-bold text-slate-700"
                         >
                           Not yet 🤔
@@ -328,7 +363,7 @@ export default function QuestionCard({
         )}
 
         {question.type === "choice" && (
-          <div className="grid grid-cols-2 gap-3">
+          <div className={`grid gap-3 ${layout?.columns === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
             {question.options.map((opt, i) => {
               const picked = answered && Number(answered.raw) === i;
               const isAnswer = i === question.answerIndex;
@@ -341,12 +376,12 @@ export default function QuestionCard({
                     : "border-slate-100 bg-white opacity-60";
               const speakable = isWordLabel(opt.label) && !locked;
               return (
-                <div key={i} className="relative">
+                <div key={i} className="relative min-w-0">
                   <button
                     type="button"
                     disabled={locked}
                     onClick={() => onSubmit(String(i))}
-                    className={`tab-press flex min-h-[72px] w-full flex-col items-center justify-center gap-1 rounded-2xl border-2 p-3 shadow-sm ${tone} ${
+                    className={`tab-press flex min-h-[72px] w-full min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border-2 p-3 shadow-sm ${tone} ${
                       speakable ? "pr-14" : ""
                     }`}
                   >
@@ -359,7 +394,11 @@ export default function QuestionCard({
                       />
                     )}
                     {opt.emoji && <span className="text-4xl leading-none">{opt.emoji}</span>}
-                    {opt.label && <span className={`font-bold text-slate-900 break-words ${bigText ? "text-2xl" : "text-xl"}`}>{opt.label}</span>}
+                    {opt.label && (
+                      <span className={`min-w-0 max-w-full text-center font-bold leading-tight text-slate-900 [overflow-wrap:anywhere] ${layout?.labelClass ?? "text-xl"}`}>
+                        {opt.label}
+                      </span>
+                    )}
                   </button>
                   {speakable && <OptionSpeaker text={opt.label ?? ""} />}
                 </div>

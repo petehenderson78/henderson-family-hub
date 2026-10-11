@@ -1,8 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound, redirect } from "next/navigation";
-import { loadLearnerBundleServer, loadRewardItemsServer, loadWalletServer } from "@/lib/learn/server";
+import {
+  kidSlugForLoginServer,
+  learnLoadErrorPage,
+  loadLearnerBundleServer,
+  loadRewardItemsServer,
+  loadWalletServer,
+} from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
-import { kidSlugForEmail } from "@/lib/learn/stats";
 import { coachEnabled } from "@/lib/learn/coach";
 import MissionView from "./mission-view";
 
@@ -19,13 +24,31 @@ export default async function KidPage({ params }: { params: Promise<{ slug: stri
   }
 
   const { slug } = await params;
+  const here = `/learn/${encodeURIComponent(slug)}`;
   // A kid login only sees their own Mission Control.
-  const kidSlug = kidSlugForEmail(user.email);
+  let kidSlug: string | null;
+  try {
+    kidSlug = await kidSlugForLoginServer(user.email);
+  } catch (e) {
+    return learnLoadErrorPage(e, here);
+  }
   if (kidSlug && kidSlug !== slug) redirect(`/learn/${kidSlug}`);
+
   const today = todayInFamilyTz();
-  const bundle = await loadLearnerBundleServer(slug, today);
-  if (!bundle) notFound();
-  const [wallet, rewardItems] = await Promise.all([loadWalletServer(bundle.learner.id, today), loadRewardItemsServer(bundle.learner.id)]);
+  const load = async () => {
+    const bundle = await loadLearnerBundleServer(slug, today);
+    if (!bundle) return null;
+    const [wallet, rewardItems] = await Promise.all([loadWalletServer(bundle.learner.id, today), loadRewardItemsServer(bundle.learner.id)]);
+    return { bundle, wallet, rewardItems };
+  };
+  let loaded: Awaited<ReturnType<typeof load>>;
+  try {
+    loaded = await load();
+  } catch (e) {
+    return learnLoadErrorPage(e, here);
+  }
+  if (!loaded) notFound();
+  const { bundle, wallet, rewardItems } = loaded;
 
   return (
     <MissionView

@@ -6,9 +6,9 @@
  * Relative imports only, `import type` for types (Node-importable).
  */
 
-import type { Learner, ProgressMap, Question, SessionRecord, Skill, SkillStatus, Subject } from "./types";
+import type { Learner, ProgressMap, Question, SessionRecord, Skill, SkillProgress, SkillStatus, Subject } from "./types";
 import type { LearnNote } from "./store-notes";
-import { MASTERY_MIN_ATTEMPTS, TEST_OUT_ITEMS, isGuess } from "./mastery";
+import { MASTERY_MIN_ATTEMPTS, SKIP_CHECK_ITEMS, SKIP_CHECK_PASS, TEST_OUT_ITEMS, applyResult, emptyProgress, isGuess } from "./mastery";
 import { SUBJECT_LABEL, SUBJECT_ORDER } from "./catalog";
 import { formatDateStr, isFinishedBook } from "./stats";
 import { familyDateOfIso } from "./dates";
@@ -70,6 +70,63 @@ export function familyDay(iso: string | null): string {
   return iso ? familyDateOfIso(iso) : "";
 }
 
+function attemptTime(a: AttemptSummary): number {
+  const t = new Date(a.createdAt).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
+/** Attempt rows logged before the skill was mastered (10 minutes of slack for client / server clocks). */
+function beforeMastery(rows: AttemptSummary[], masteredAt: string | null): AttemptSummary[] {
+  const at = masteredAt ? new Date(masteredAt).getTime() : Number.NaN;
+  const cutoff = Number.isNaN(at) ? Number.POSITIVE_INFINITY : at + 10 * 60_000;
+  return rows.filter((a) => attemptTime(a) <= cutoff).sort((a, b) => attemptTime(a) - attemptTime(b));
+}
+
+/** The learn / test rows that led to mastery ended with a passing test set: 5/5 (probe) or >= 9/10 (skip check, probe pair). */
+function masteredByTestRows(rows: AttemptSummary[]): boolean {
+  const run: boolean[] = [];
+  for (let i = rows.length - 1; i >= 0 && rows[i].mode === "test"; i--) run.unshift(rows[i].correct && isIndependent(rows[i]));
+  if (run.length >= TEST_OUT_ITEMS && run.slice(-TEST_OUT_ITEMS).every(Boolean)) return true;
+  return run.length >= SKIP_CHECK_ITEMS && run.slice(-SKIP_CHECK_ITEMS).filter(Boolean).length >= SKIP_CHECK_PASS;
+}
+
+/** Replays the learn rows (test rows pre-fill the window, as the engine does) and reports whether practice met the mastery rule. */
+function masteredByPractice(skillId: string, rows: AttemptSummary[]): boolean {
+  let sim = emptyProgress(skillId);
+  for (const a of rows) {
+    const mode = a.mode === "test" ? "test" : "learn";
+    sim = applyResult(sim, { correct: a.correct, helpLevel: isIndependent(a) ? "independent" : "hint" }, new Date(attemptTime(a)), mode);
+    if (sim.status === "mastered") return true;
+  }
+  return false;
+}
+
+/**
+ * How a mastered skill was mastered:
+ *   "test-out"        — progress.testOut (a passed skip check or placement
+ *                       probe), or the attempts that led to mastery end with a
+ *                       passing test set (rows written before the flag existed);
+ *   "practiced"       — the learn rows (with any earlier test rows) met the
+ *                       mastery rule (>= 10 attempts, last 10 >= 0.9, streak >= 3);
+ *   "parent-verified" — anything else: a parent's "Mark mastered" with no
+ *                       attempts, too few, or after a failed probe.
+ * Without attempt rows the progress counters decide (testOut, else >= 10
+ * attempts = practiced, else parent-verified).
+ */
+export function masteryModeFor(p: SkillProgress | undefined, attempts: AttemptSummary[]): MasteryMode {
+  if (!p || p.status !== "mastered") return "—";
+  if (p.testOut === true) return "test-out";
+  const rows = attempts.filter((a) => !isLoggedGuess(a));
+  if (rows.length === 0) return p.attempts >= MASTERY_MIN_ATTEMPTS ? "practiced" : "parent-verified";
+  const path = beforeMastery(
+    rows.filter((a) => a.mode === "learn" || a.mode === "test"),
+    p.masteredAt
+  );
+  if (masteredByTestRows(path)) return "test-out";
+  if (masteredByPractice(p.skillId, path)) return "practiced";
+  return "parent-verified";
+}
+
 export function buildSkillRows(catalog: Skill[], progressMap: ProgressMap, attempts: AttemptSummary[]): SkillReportRow[] {
   const bySkill = new Map<string, AttemptSummary[]>();
   for (const a of attempts) {
@@ -86,21 +143,11 @@ export function buildSkillRows(catalog: Skill[], progressMap: ProgressMap, attem
 
     // Learn mode logs ONE row per item: the first answer when it was right, else the hinted retry —
     // so a hinted / taught row is an independent miss, exactly like the engine's mastery window.
-    const learnRows = rows.filter((a) => a.mode !== "review");
+    // Learn and skip-check / probe rows only: any other mode (a future "mixup") stays out of both figures.
+    const learnRows = rows.filter((a) => a.mode === "learn" || a.mode === "test");
     const reviewRows = rows.filter((a) => a.mode === "review");
-    const testRows = rows.filter((a) => a.mode === "test");
 
-    let mode: MasteryMode = "—";
-    if (status === "mastered") {
-      if (fromAttempts) {
-        const practice = learnRows.length - testRows.length;
-        mode = testRows.length >= TEST_OUT_ITEMS && practice < MASTERY_MIN_ATTEMPTS ? "test-out" : "practiced";
-      } else if (!p || p.attempts === 0) {
-        mode = "parent-verified";
-      } else {
-        mode = p.attempts <= TEST_OUT_ITEMS ? "test-out" : "practiced";
-      }
-    }
+    const mode = masteryModeFor(p, bySkill.get(skill.id) ?? []);
 
     return {
       skill,

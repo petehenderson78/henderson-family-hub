@@ -119,6 +119,25 @@ export function familyMidnightIso(dateStr: string): string {
   return new Date(Date.UTC(y, (m || 1) - 1, d || 1, 5)).toISOString();
 }
 
+/**
+ * Noon (family timezone) of `dateStr`, as an ISO instant. Review dates are stored
+ * at family noon: the family DATE is what counts (isReviewDue), and noon reads as
+ * the same calendar day in every US timezone, unlike midnight.
+ */
+export function familyNoonIso(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  for (const offsetHours of [16, 17]) {
+    const t = new Date(Date.UTC(y, (m || 1) - 1, d || 1, offsetHours));
+    if (todayInFamilyTz(t) === dateStr && minutesSinceMidnightInFamilyTz(t) === 12 * 60) return t.toISOString();
+  }
+  return new Date(Date.UTC(y, (m || 1) - 1, d || 1, 16)).toISOString();
+}
+
+/** Whole days from `from` to `to` (YYYY-MM-DD; negative when `to` is earlier). */
+export function daysBetweenDateStr(from: string, to: string): number {
+  return Math.round((dateStrToUtc(to).getTime() - dateStrToUtc(from).getTime()) / 86400000);
+}
+
 /** Monday (YYYY-MM-DD) of the family week containing `dateStr`. */
 export function weekStartDate(dateStr: string): string {
   return addDaysToDateStr(dateStr, -weekdayIndexMon(dateStr));

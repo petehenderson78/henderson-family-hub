@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Learner, Skill, SkillProgress } from "@/lib/learn/types";
 import { SUBJECT_EMOJI, SUBJECT_LABEL, catalogFor, groupBySubject } from "@/lib/learn/catalog";
-import { isReviewDue, mergeProgress, windowAccuracy } from "@/lib/learn/mastery";
+import { isReviewDueOn, mergeProgress, windowAccuracy } from "@/lib/learn/mastery";
+import { isWeekend, todayInFamilyTz } from "@/lib/learn/dates";
 import SkillChip, { CHIP_LABEL, type ChipStatus } from "../../components/skill-chip";
 
 interface MapViewProps {
@@ -21,13 +22,16 @@ export default function MapView({ learner, progressRows, ponies = {}, nowIso }: 
   const catalog = catalogFor(learner.slug);
   const progressMap = mergeProgress(catalog, progressRows);
   const now = new Date(nowIso);
+  // Skip checks are family weekend time (Sat/Sun in America/New_York), like the planner's offer.
+  const today = todayInFamilyTz(now);
+  const skipChecksOpen = isWeekend(today);
   const groups = groupBySubject(catalog);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const base = `/learn/${learner.slug}`;
 
   const chipStatus = (skill: Skill): ChipStatus => {
     const p = progressMap[skill.id];
-    return isReviewDue(p, now) ? "due" : p.status;
+    return isReviewDueOn(p, today, learner.settings) ? "due" : p.status;
   };
 
   const mastered = catalog.filter((s) => progressMap[s.id]?.status === "mastered").length;
@@ -42,7 +46,7 @@ export default function MapView({ learner, progressRows, ponies = {}, nowIso }: 
   return (
     <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
       <div className="mx-auto max-w-lg px-4 pt-8">
-        <Link href={base} className="text-xs font-semibold text-slate-400">
+        <Link href={base} className="-ml-1 inline-flex min-h-[44px] items-center pl-1 pr-3 text-xs font-semibold text-slate-400">
           ← Mission Control
         </Link>
         <div className="mt-3 flex items-end justify-between">
@@ -115,7 +119,7 @@ export default function MapView({ learner, progressRows, ponies = {}, nowIso }: 
                     {selected.title} · Grade {selected.grade} · {selected.standards.join(", ")}
                   </p>
                 </div>
-                <button type="button" onClick={() => setSelectedId(null)} className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500" aria-label="Close">
+                <button type="button" onClick={() => setSelectedId(null)} className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500" aria-label="Close">
                   ✕
                 </button>
               </div>
@@ -152,13 +156,19 @@ export default function MapView({ learner, progressRows, ponies = {}, nowIso }: 
                     {selectedStatus === "due" ? "Review now 🔁" : selectedStatus === "mastered" ? "Practice ⭐" : "Practice 📚"}
                   </button>
                   {selectedStatus === "ready" && selected.testOut ? (
-                    <button
-                      type="button"
-                      onClick={() => go(selected, "test")}
-                      className="flex min-h-[56px] items-center justify-center rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 text-base font-bold text-white shadow-lg shadow-indigo-500/20"
-                    >
-                      Skip check ⚡
-                    </button>
+                    skipChecksOpen ? (
+                      <button
+                        type="button"
+                        onClick={() => go(selected, "test")}
+                        className="flex min-h-[56px] items-center justify-center rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 text-base font-bold text-white shadow-lg shadow-indigo-500/20"
+                      >
+                        Skip check ⚡
+                      </button>
+                    ) : (
+                      <div className="flex items-center justify-center rounded-2xl bg-violet-50 px-3 text-center text-xs font-semibold text-violet-700">
+                        ⚡ Skip checks open on the weekend
+                      </div>
+                    )
                   ) : (
                     <div className="flex items-center justify-center rounded-2xl bg-slate-50 px-3 text-center text-xs font-medium text-slate-500">
                       {selected.parentTip}

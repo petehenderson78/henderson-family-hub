@@ -63,7 +63,7 @@ interface SpeakButtonProps {
   text: string;
   className?: string;
   label?: string;
-  /** compact 36px circle for inline use next to options */
+  /** compact circle for inline use (still a 44px target) */
   small?: boolean;
 }
 
@@ -91,7 +91,7 @@ export default function SpeakButton({ text, className = "", label, small = false
       aria-label={label ?? "Read aloud"}
       aria-pressed={speaking}
       className={`tab-press inline-flex items-center justify-center gap-1 rounded-full ${
-        small ? "h-9 min-w-9 px-2 text-sm" : "h-11 min-w-11 px-3 text-base"
+        small ? "h-11 min-w-11 px-2 text-sm" : "h-11 min-w-11 px-3 text-base"
       } ${speaking ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-600"} ${className}`}
     >
       🔊{label ? <span className="text-xs font-semibold">{label}</span> : null}

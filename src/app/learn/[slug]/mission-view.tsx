@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { Learner, SessionBlock, SessionRecord, SkillProgress } from "@/lib/learn/types";
 import { catalogFor } from "@/lib/learn/catalog";
 import { kindProgress, ladderFor, mergeProgress } from "@/lib/learn/mastery";
@@ -28,6 +29,7 @@ import MissionScreen from "../components/mission-screen";
 import RewardsSheet from "../components/rewards-sheet";
 import CoachSheet from "../components/coach-sheet";
 import { useCoach } from "../components/use-coach";
+import { useWriteQueue } from "../components/use-write-queue";
 
 interface MissionViewProps {
   learner: Learner;
@@ -78,13 +80,22 @@ export default function MissionView({
   const streak = computeStreak(sessions, today, settings);
   const ring = weeklyRing(sessions, today);
   const role = missionRole(sessions, today);
-  const due = reviewDueCount(catalog, progressMap, now);
+  const due = reviewDueCount(catalog, progressMap, now, settings, today);
   const base = `/learn/${learner.slug}`;
   const currency = theme.currency;
   const ladder = ladderFor(theme);
 
   const [balance, setBalance] = useState(initialBalance);
   const [storeOpen, setStoreOpen] = useState(false);
+
+  // Practice writes still waiting on this device (Wi-Fi blip, "Continue anyway") are sent on load and on
+  // reconnect; when any land, the server props are refreshed so the mission shows the finished blocks.
+  const router = useRouter();
+  useWriteQueue(learner.slug, {
+    onFlushed: (r) => {
+      if (r.ok > 0) router.refresh();
+    },
+  });
 
   const coach = useCoach(learner.slug);
   const nextBlock = blocks.find((b) => !b.done);
@@ -106,7 +117,7 @@ export default function MissionView({
     <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
       <div className="mx-auto max-w-lg px-4 pt-8">
         {!isKid && (
-          <Link href="/learn" className="text-xs font-semibold text-slate-400">
+          <Link href="/learn" className="-ml-1 inline-flex min-h-[44px] items-center pl-1 pr-3 text-xs font-semibold text-slate-400">
             ← All learners
           </Link>
         )}
@@ -219,7 +230,7 @@ export default function MissionView({
             <span />
           )}
           {!isKid && (
-            <Link href="/learn/parent" className="text-xs font-semibold text-slate-400">
+            <Link href="/learn/parent" className="-mr-1 inline-flex min-h-[44px] items-center pl-3 pr-1 text-xs font-semibold text-slate-400">
               Parent view →
             </Link>
           )}
@@ -235,6 +246,7 @@ export default function MissionView({
         open={storeOpen}
         onClose={() => setStoreOpen(false)}
         onRedeemed={(item) => setBalance((b) => b - item.cost)}
+        viewerIsParent={isKid ? false : undefined}
       />
       <CoachSheet state={coach.state} onClose={coach.close} bigText={learner.grade <= 1} />
     </div>

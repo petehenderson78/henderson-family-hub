@@ -7,8 +7,7 @@ import { WORKSHOPS, featuredWorkshops } from "@/lib/learn/workshops";
 import { isoWeekNumber } from "@/lib/learn/dates";
 import { POINTS } from "@/lib/learn/stats";
 import { awardPoints, newClientId } from "@/lib/learn/store";
-import { addNote } from "@/lib/learn/store-notes";
-import HoldToConfirm from "../../components/hold-to-confirm";
+import { addNote, isLearnWriteError } from "@/lib/learn/store-notes";
 
 interface WorkshopsViewProps {
   learner: Learner;
@@ -16,7 +15,7 @@ interface WorkshopsViewProps {
   /** points earned this week (cap 25) */
   weekPoints: number;
   today: string;
-  /** signed in as the kid: marking done needs a parent's hold */
+  /** signed in as the kid: marking done (it pays points) is parent-only, so a grown-up does it in Tonight */
   isKid: boolean;
 }
 
@@ -39,7 +38,7 @@ export default function WorkshopsView({ learner, doneThisWeek, weekPoints, today
   /** Done = every step checked AND the Show logged (a learn_notes row), then pt:workshop (3, within the weekly cap). */
   async function markDone(w: Workshop) {
     const show = (shows[w.id] ?? "").trim();
-    if (done.has(w.id) || saving || !show) return;
+    if (isKid || done.has(w.id) || saving || !show) return;
     setSaving(w.id);
     setError(null);
     try {
@@ -58,8 +57,9 @@ export default function WorkshopsView({ learner, doneThisWeek, weekPoints, today
       setPaid((p) => ({ ...p, [w.id]: points }));
       setDone((d) => new Set(d).add(w.id));
       setJustDone(w.id);
-    } catch {
-      setError("Couldn't save. Check the connection and try again.");
+    } catch (err) {
+      // A refusal (e.g. "not-allowed" on a kid login) has its own calm text; "failed" is worth a retry.
+      setError(isLearnWriteError(err) && err.code !== "failed" ? err.message : "Couldn't save. Check the connection and try again.");
     } finally {
       setSaving(null);
     }
@@ -111,6 +111,10 @@ export default function WorkshopsView({ learner, doneThisWeek, weekPoints, today
               <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-center text-sm font-bold text-emerald-700">
                 Done! {paid[w.id] !== undefined ? (paid[w.id] > 0 ? `+${paid[w.id]} ${currency} 🎉` : "This week's points are all in — great work 🎉") : "🎉"}
               </p>
+            ) : isKid ? (
+              <p className="mt-3 rounded-xl bg-indigo-50 p-3 text-center text-sm font-semibold text-indigo-800">
+                All done and shown to someone? Ask a grown-up to mark it done in Tonight 🙋
+              </p>
             ) : (
               <div className="mt-3">
                 <label className="block">
@@ -123,24 +127,14 @@ export default function WorkshopsView({ learner, doneThisWeek, weekPoints, today
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 outline-none focus:border-indigo-400"
                   />
                 </label>
-                {isKid ? (
-                  <div className="mt-2">
-                    <HoldToConfirm
-                      label={ready ? "Parent: hold to mark done" : !allChecked ? "Check off every step first" : "Log the Show first"}
-                      disabled={!ready}
-                      onConfirm={() => void markDone(w)}
-                    />
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={!ready}
-                    onClick={() => void markDone(w)}
-                    className="mt-2 flex min-h-[56px] w-full items-center justify-center rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-base font-bold text-white shadow-lg shadow-blue-500/20 disabled:opacity-40"
-                  >
-                    {saving === w.id ? "Saving…" : !allChecked ? "Check off every step first" : !show.trim() ? "Log the Show first" : `Mark done · +${w.points} ${currency}`}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  disabled={!ready}
+                  onClick={() => void markDone(w)}
+                  className="mt-2 flex min-h-[56px] w-full items-center justify-center rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-base font-bold text-white shadow-lg shadow-blue-500/20 disabled:opacity-40"
+                >
+                  {saving === w.id ? "Saving…" : !allChecked ? "Check off every step first" : !show.trim() ? "Log the Show first" : `Mark done · +${w.points} ${currency}`}
+                </button>
               </div>
             )}
           </div>
@@ -152,7 +146,7 @@ export default function WorkshopsView({ learner, doneThisWeek, weekPoints, today
   return (
     <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
       <div className="mx-auto max-w-lg px-4 pt-8">
-        <Link href={base} className="text-xs font-semibold text-slate-400">
+        <Link href={base} className="-ml-1 inline-flex min-h-[44px] items-center pl-1 pr-3 text-xs font-semibold text-slate-400">
           ← Mission Control
         </Link>
         <h1 className="mt-3 text-[28px] font-bold tracking-tight text-slate-900">Workshops 🛠️</h1>

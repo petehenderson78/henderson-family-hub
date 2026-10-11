@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { kidSlugForEmail } from "@/lib/learn/stats";
+import { isParentEmail, kidSlugForEmail } from "@/lib/learn/stats";
 
 const tabs = [
   {
@@ -92,17 +92,35 @@ export default function BottomNav() {
   const pathname = usePathname();
   const router = useRouter();
   const [supabase] = useState(() => createClient());
-  // Kid logins (cole@/lily@) get a trimmed nav. Read from the local session (no network) and
-  // keep it in sync with auth changes; until known, assume parent (worst case: an extra tab for a frame).
+  // Kid logins get a trimmed nav: cole@/lily@ from the local session (no network), or a learner's
+  // learners.email (one small read, only for a login that is neither). Kept in sync with auth
+  // changes; until known, assume parent (worst case: an extra tab for a frame; /budget itself
+  // redirects children on the server).
   const [kid, setKid] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (alive) setKid(kidSlugForEmail(data.session?.user?.email) !== null);
-    });
+    let seq = 0;
+    const resolve = async (email: string | null | undefined): Promise<boolean> => {
+      if (kidSlugForEmail(email) !== null) return true;
+      const e = (email ?? "").trim().toLowerCase();
+      if (!e || isParentEmail(e)) return false;
+      const { data } = await supabase.from("learners").select("email");
+      return ((data ?? []) as { email: string | null }[]).some((l) => (l.email ?? "").trim().toLowerCase() === e);
+    };
+    const apply = (email: string | null | undefined) => {
+      const mine = ++seq;
+      resolve(email).then(
+        (isKid) => {
+          if (alive && mine === seq) setKid(isKid);
+        },
+        () => undefined
+      );
+    };
+    supabase.auth.getSession().then(({ data }) => apply(data.session?.user?.email));
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (alive) setKid(kidSlugForEmail(session?.user?.email) !== null);
+      // Defer: supabase-js must not be called from inside its own auth callback.
+      setTimeout(() => apply(session?.user?.email), 0);
     });
     return () => {
       alive = false;

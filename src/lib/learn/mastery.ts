@@ -20,8 +20,16 @@
  *   4 / 10 real answers.
  *
  * SPACED REVIEW (4-item sets)
- *   A review is due on the family DATE of nextReviewAt (America/New_York), not
- *   at its clock time. >= 3/4 independent-correct → interval advances along
+ *   Review dates are family calendar DATES (America/New_York): a review set or
+ *   mastery on family date D schedules the next review for D + interval days,
+ *   stored at family noon (reviewAtIso), so a DST change never moves it. It is
+ *   due on that date, not at its clock time. Paused days (pausedUntil,
+ *   vacations, "off" light weeks) stop the interval clock: isReviewDueOn /
+ *   effectiveReviewDate add the paused days that fell between the day the
+ *   review was scheduled and today (future pauses never move a date; a day
+ *   covered twice counts once). planMission and chooseSkillForBlock use it;
+ *   isReviewDue (no settings) stays for callers without settings.
+ *   >= 3/4 independent-correct → interval advances along
  *   [1, 3, 7, 14, 30, 60] days (only when the review was actually due). < 3/4 →
  *   interval halves (min 1 day) and review_misses += 1. Two consecutive failed
  *   sets → status back to "learning" (review_misses keeps the count so the parent
@@ -31,9 +39,17 @@
  *   portion. Fridays and weekends run up to 4 due sets per block.
  *   The Friday "mix-up" (8 interleaved items over mastered skills, 12 on the
  *   last Friday of the month with the two weakest skills first) updates windows
- *   and streaks only — never the interval.
+ *   and streaks only — never the interval, whatever number of skills it covers
+ *   (decide it with isMixupBlock(block), never from the skill count). It needs
+ *   at least 2 mastered skills on generators tonight's other blocks did not use;
+ *   otherwise Friday's brain block is planned like any other night's.
+ *   No generator twice in a mission (new skill, review sets and mix-up alike):
+ *   a due set whose generator is already planned tonight waits for the next
+ *   night; a due set on the new skill's generator gives way to the next due set,
+ *   or, when there is none, waits while the new skill keeps its slot.
  *
  * STUCK RULE (learn mode)
+ *   isStuck takes one boolean per item, TRUE = THE FIRST TRY WAS CORRECT.
  *   3 consecutive items whose independent (first) answer was wrong → the block
  *   ends early with a kind card and 3 effort XP; progress gets needs_help = true
  *   and help_note = the last prompt. needs_help clears when the skill is mastered.
@@ -41,8 +57,9 @@
  * SKIP CHECK (unit pretest, kid label "Skip check"; weekends)
  *   10 items, no hints, no retry. >= 9/10 → mastered with test_out = true and
  *   intervalDays = 3. Math 7-8/10 → learning, help_note "quick fill"; reading
- *   6-8/10 → learning, help_note "hole fill"; anything else → learning. The
- *   window is pre-filled with the results.
+ *   6-8/10 → learning, help_note "hole fill"; anything else → learning (full
+ *   learn: an old "quick fill" / "hole fill" note is cleared, so no further
+ *   skip check is offered). The window is pre-filled with the results.
  *
  * PLACEMENT SPRINT
  *   5-item probes up a subject's skills in catalog order. 5/5 → test-out;
@@ -57,7 +74,16 @@
  *   light weeks "review-only" plan review sets only. The streak counts
  *   consecutive "done" days and FREEZES — never resets — on skipped / vacation /
  *   partial / paused days, weekend days and a Friday Free; a school night with
- *   nothing done breaks it (today excepted).
+ *   nothing done (no row, or a row still "planned") breaks it (today excepted).
+ *   A session with status "done" counts whatever its blocks say (the parent's
+ *   "Weekend set done"). streakInfo also says whether the walk was complete or
+ *   ran out of the sessions it was given.
+ *
+ * BRAIN ROTATION (design §9)
+ *   The brain block's new skill prefers the weekday's reasoning family: Mon
+ *   verbal, Tue paper folding / rotation, Wed number puzzles, Thu figures and
+ *   logic (BRAIN_ROTATION); Fri is the mix-up, weekends any. Without a ready or
+ *   learning skill in the family, any eligible reasoning skill.
  *
  * XP (drives the level ladder only; the currency is input points, see stats.ts)
  *   1 per independent correct item, 0.5 when helped; 3 effort XP when the stuck
@@ -83,15 +109,18 @@ import type {
   Subject,
 } from "./types";
 import {
-  addDays,
   addDaysToDateStr,
   dateInRange,
+  daysBetweenDateStr,
+  familyDateOfIso,
+  familyNoonIso,
   isFriday,
   isLastFridayOfMonth,
   isWeekend,
   minutesSinceMidnightInFamilyTz,
   parseClock,
   todayInFamilyTz,
+  weekdayIndexMon,
 } from "./dates";
 
 export const WINDOW_SIZE = 10;
@@ -114,6 +143,8 @@ export const MIXUP_SET_SIZE = 8;
 export const MIXUP_LAST_FRIDAY_SIZE = 12;
 /** Last Friday of the month: the two weakest mastered skills lead the mix-up. */
 export const MIXUP_REOPEN_WEAKEST = 2;
+/** A mix-up needs at least this many skills (one per generator); fewer → Friday's brain block runs as usual. */
+export const MIXUP_MIN_SKILLS = 2;
 export const SKIP_CHECK_ITEMS = 10;
 export const SKIP_CHECK_PASS = 9;
 export const MATH_QUICK_FILL: readonly [number, number] = [7, 8];
@@ -132,6 +163,8 @@ export const MIN_LEARN_MINUTES = 3;
 export const PLACEMENT_MAX_FAILS = 2;
 /** XP per level (Appendix A: levelXp 500). */
 export const LEVEL_XP = 500;
+/** Upper bound for day-by-day walks (streak, paused days): about 2.7 years. */
+const MAX_DAY_WALK = 1000;
 
 /** Item types where a sub-1.5 s wrong answer is treated as a tap, not an answer. */
 export const GUESSABLE_TYPES: ReadonlySet<string> = new Set(["choice", "tap", "tiles"]);
@@ -225,6 +258,92 @@ export function isReviewDue(p: SkillProgress | undefined, now: Date): boolean {
   return todayInFamilyTz(at) <= todayInFamilyTz(now);
 }
 
+/**
+ * The nextReviewAt for a review `intervalDays` family days after `now`: noon
+ * (family time) of that family DATE. The arithmetic is on calendar dates, so a
+ * DST change in between never moves the due day (now + n × 24 h landed a day
+ * late after 23:00 before spring-forward, and on the same day after 00:00 on
+ * the fall-back night).
+ */
+export function reviewAtIso(now: Date, intervalDays: number): string {
+  return familyNoonIso(addDaysToDateStr(todayInFamilyTz(now), Math.max(0, Math.round(intervalDays))));
+}
+
+/**
+ * The family date a review's interval started: nextReviewAt's family date minus
+ * intervalDays (the engine always stores schedule day + interval). Without an
+ * interval, the family date of lastPracticedAt (later practice — a mix-up, a
+ * bonus review — moves that forward, so it is only the fallback). Never later
+ * than the due date; null without a nextReviewAt.
+ */
+export function reviewScheduledOn(p: Pick<SkillProgress, "nextReviewAt" | "intervalDays" | "lastPracticedAt">): string | null {
+  const due = familyDateOfIso(p.nextReviewAt);
+  if (!due) return null;
+  const from = p.intervalDays >= 1 ? addDaysToDateStr(due, -Math.round(p.intervalDays)) : familyDateOfIso(p.lastPracticedAt);
+  return from && from < due ? from : due;
+}
+
+/**
+ * Paused days (pausedUntil from pausedFrom, vacations, "off" light weeks) in
+ * (afterDate, throughDate], each date counted once however many pauses cover
+ * it. `today` resolves a legacy pause without pausedFrom (see isPaused).
+ */
+export function pausedDaysBetween(settings: PauseSettings | null | undefined, afterDate: string, throughDate: string, today: string = throughDate): number {
+  if (!settings || !afterDate || !throughDate || throughDate <= afterDate) return 0;
+  let n = 0;
+  let d = afterDate;
+  for (let i = 0; i < MAX_DAY_WALK; i++) {
+    d = addDaysToDateStr(d, 1);
+    if (d > throughDate) break;
+    if (isPaused(settings, d, today)) n += 1;
+  }
+  return n;
+}
+
+/**
+ * The family date a review is effectively due, seen from `today`: the interval
+ * counts only days that were NOT paused between the day it was scheduled
+ * (reviewScheduledOn) and today, so the due date is nextReviewAt's family date
+ * plus the paused days in that stretch. Only days up to `today` are looked at:
+ * a planned future vacation never moves a date, a pause that is shortened or
+ * cleared stops counting the days it no longer covers, and days after today
+ * count as plain days. Without settings (or a pause), nextReviewAt's family
+ * date. null when there is no valid nextReviewAt.
+ *
+ * Do not combine with shiftReviewDates (the old save-time shift): that would
+ * count the same pause twice.
+ */
+export function effectiveReviewDate(p: SkillProgress | undefined, today: string, settings?: PauseSettings | null): string | null {
+  if (!p?.nextReviewAt) return null;
+  const due = familyDateOfIso(p.nextReviewAt);
+  if (!due) return null;
+  const from = reviewScheduledOn(p);
+  if (!settings || !from || from >= due) return due;
+  const need = daysBetweenDateStr(from, due);
+  let counted = 0;
+  let d = from;
+  for (let i = 0; i < MAX_DAY_WALK; i++) {
+    d = addDaysToDateStr(d, 1);
+    if (d > today) return addDaysToDateStr(d, need - counted - 1);
+    if (!isPaused(settings, d, today)) counted += 1;
+    if (counted >= need) return d;
+  }
+  return due;
+}
+
+/**
+ * Pause-aware due test — use it wherever the learner's settings are at hand: a
+ * mastered skill is due on `today` (family YYYY-MM-DD) when its effective review
+ * date is today or earlier. A mastered skill without a (valid) nextReviewAt is
+ * due. Without settings it equals isReviewDue.
+ */
+export function isReviewDueOn(p: SkillProgress | undefined, today: string, settings?: PauseSettings | null): boolean {
+  if (!p || p.status !== "mastered") return false;
+  if (!p.nextReviewAt) return true;
+  const at = effectiveReviewDate(p, today, settings);
+  return !at || at <= today;
+}
+
 /** One answered item, as the player reports it to the engine. */
 export interface AnswerInput {
   correct: boolean;
@@ -270,7 +389,7 @@ function master(p: SkillProgress, now: Date, intervalDays: number, viaTestOut: b
     status: "mastered",
     masteredAt: nowIso,
     intervalDays,
-    nextReviewAt: addDays(now, intervalDays).toISOString(),
+    nextReviewAt: reviewAtIso(now, intervalDays),
     reviewMisses: 0,
     needsHelp: false,
     helpNote: null,
@@ -333,14 +452,14 @@ export function applyReviewSet(p: SkillProgress, results: boolean[], now: Date, 
   if (reviewSetPassed(results)) {
     if (!wasDue) return { ...p, reviewMisses: 0 };
     const intervalDays = nextReviewInterval(p.intervalDays);
-    return { ...p, intervalDays, nextReviewAt: addDays(now, intervalDays).toISOString(), reviewMisses: 0 };
+    return { ...p, intervalDays, nextReviewAt: reviewAtIso(now, intervalDays), reviewMisses: 0 };
   }
   const misses = (p.reviewMisses ?? 0) + 1;
   if (misses >= REVIEW_MAX_MISSES) {
     return { ...p, status: "learning", intervalDays: 0, nextReviewAt: null, masteredAt: null, reviewMisses: misses, testOut: false };
   }
   const intervalDays = Math.max(1, Math.floor(p.intervalDays / 2));
-  return { ...p, intervalDays, nextReviewAt: addDays(now, intervalDays).toISOString(), reviewMisses: misses };
+  return { ...p, intervalDays, nextReviewAt: reviewAtIso(now, intervalDays), reviewMisses: misses };
 }
 
 /** Master a skill from a passed test-out set (skip check or placement probe). */
@@ -427,10 +546,24 @@ export function applySkipCheck(p: SkillProgress, results: boolean[], now: Date, 
   const folded = foldIntoLearning(p, taken, now);
   if (band === "quick-fill") return { ...folded, helpNote: "quick fill" };
   if (band === "hole-fill") return { ...folded, helpNote: "hole fill" };
-  return folded;
+  // Full learn: a re-check that scored low ends the quick / hole fill (no skip check next weekend).
+  return isSkipCheckNote(folded.helpNote) ? { ...folded, helpNote: null } : folded;
 }
 
-/** The stuck rule: the last 3 items' independent answers were all wrong. */
+function isSkipCheckNote(note: string | null | undefined): boolean {
+  return note === "quick fill" || note === "hole fill";
+}
+
+/**
+ * The stuck rule: the last 3 items' independent (first-try) answers were all wrong.
+ *
+ * INPUT: ONE BOOLEAN PER ITEM, OLDEST FIRST. TRUE = THE FIRST TRY WAS CORRECT
+ * (INDEPENDENT). FALSE = THE FIRST TRY WAS A MISS (EVEN IF THE RETRY LANDED).
+ * RETURNS TRUE AFTER 3 CONSECUTIVE FALSE VALUES (3 FIRST-TRY MISSES IN A ROW);
+ * NEVER TRUE WHEN THE LAST 3 INCLUDE A TRUE. Call it as
+ * `isStuck(results.map((r) => r.firstTryCorrect))` — passing "missed" flags
+ * inverts the rule (3 correct answers would end the block).
+ */
 export function isStuck(firstTryResults: boolean[]): boolean {
   if (firstTryResults.length < STUCK_MISSES) return false;
   return firstTryResults.slice(-STUCK_MISSES).every((r) => r === false);
@@ -441,10 +574,18 @@ export function markNeedsHelp(p: SkillProgress, note: string): SkillProgress {
   return { ...p, needsHelp: true, helpNote: note.trim().slice(0, 240) || null };
 }
 
-/** Shift every pending review by `days` (vacation: due dates move with the pause). */
+/**
+ * Shift every pending review by `days` family days (date arithmetic, DST-safe).
+ * @deprecated Paused days are handled when the plan is built (isReviewDueOn /
+ * effectiveReviewDate). Writing shifted dates as well counts a pause twice;
+ * kept only for compatibility.
+ */
 export function shiftReviewDates(rows: SkillProgress[], days: number): SkillProgress[] {
   if (!days) return rows;
-  return rows.map((p) => (p.status === "mastered" && p.nextReviewAt ? { ...p, nextReviewAt: addDays(new Date(p.nextReviewAt), days).toISOString() } : p));
+  return rows.map((p) => {
+    const due = p.status === "mastered" ? familyDateOfIso(p.nextReviewAt) : "";
+    return due ? { ...p, nextReviewAt: familyNoonIso(addDaysToDateStr(due, Math.round(days))) } : p;
+  });
 }
 
 /** Parent "Mark mastered" (book work proved it): mastered, review in `intervalDays`, flags cleared. */
@@ -456,7 +597,7 @@ export function markMasteredByParent(p: SkillProgress, now: Date, intervalDays =
     masteredAt: nowIso,
     lastPracticedAt: p.lastPracticedAt ?? nowIso,
     intervalDays,
-    nextReviewAt: addDays(now, intervalDays).toISOString(),
+    nextReviewAt: reviewAtIso(now, intervalDays),
     reviewMisses: 0,
     needsHelp: false,
     helpNote: null,
@@ -613,28 +754,74 @@ function byNextReview(statuses: ProgressMap) {
   };
 }
 
+/** Most overdue first by the pause-aware effective date, then by nextReviewAt. */
+function byEffectiveReview(statuses: ProgressMap, today: string, settings: PauseSettings | null | undefined) {
+  const raw = byNextReview(statuses);
+  const cache = new Map<string, string>();
+  const eff = (s: Skill): string => {
+    let v = cache.get(s.id);
+    if (v === undefined) {
+      v = effectiveReviewDate(statuses[s.id], today, settings) ?? "";
+      cache.set(s.id, v);
+    }
+    return v;
+  };
+  return (a: Skill, b: Skill) => {
+    const ea = eff(a);
+    const eb = eff(b);
+    return ea < eb ? -1 : ea > eb ? 1 : raw(a, b);
+  };
+}
+
+/** One skill per generator, in list order, skipping generators in `used` (no generator twice in a mission). */
+function distinctGenerators(list: Skill[], used: ReadonlySet<string> = new Set()): Skill[] {
+  const seen = new Set(used);
+  const out: Skill[] = [];
+  for (const s of list) {
+    if (seen.has(s.generator)) continue;
+    seen.add(s.generator);
+    out.push(s);
+  }
+  return out;
+}
+
 interface Choice {
   skill: Skill;
   mode: PracticeMode;
   offerTestOut?: boolean;
 }
 
+/** Lowest-grade "learning" skill, else lowest-grade "ready" (null when neither). */
+function learnableChoice(pool: Skill[], statuses: ProgressMap): Choice | null {
+  const learning = pool.filter((s) => statuses[s.id]?.status === "learning").sort(byGrade);
+  if (learning.length) return { skill: learning[0], mode: "learn" };
+  const ready = pool.filter((s) => statuses[s.id]?.status === "ready").sort(byGrade);
+  if (ready.length) return { skill: ready[0], mode: "learn", offerTestOut: ready[0].testOut };
+  return null;
+}
+
 /**
  * Due reviews first (unless `skipDue`: the planner runs them as their own sets),
  * then lowest-grade "learning", then lowest-grade "ready", then a bonus review.
+ * Pass `settings` (and `today`) to make the due test pause-aware (isReviewDueOn).
  */
-export function chooseSkillForBlock(pool: Skill[], statuses: ProgressMap, now: Date, skipDue = false): Choice | null {
+export function chooseSkillForBlock(
+  pool: Skill[],
+  statuses: ProgressMap,
+  now: Date,
+  skipDue = false,
+  settings?: PauseSettings | null,
+  today?: string
+): Choice | null {
   if (pool.length === 0) return null;
+  const date = today ?? todayInFamilyTz(now);
   if (!skipDue) {
-    const due = pool.filter((s) => isReviewDue(statuses[s.id], now)).sort(byNextReview(statuses));
+    const due = pool.filter((s) => isReviewDueOn(statuses[s.id], date, settings)).sort(byEffectiveReview(statuses, date, settings));
     if (due.length) return { skill: due[0], mode: "review" };
   }
 
-  const learning = pool.filter((s) => statuses[s.id]?.status === "learning").sort(byGrade);
-  if (learning.length) return { skill: learning[0], mode: "learn" };
-
-  const ready = pool.filter((s) => statuses[s.id]?.status === "ready").sort(byGrade);
-  if (ready.length) return { skill: ready[0], mode: "learn", offerTestOut: ready[0].testOut };
+  const learnable = learnableChoice(pool, statuses);
+  if (learnable) return learnable;
 
   const mastered = pool.filter((s) => statuses[s.id]?.status === "mastered").sort(byNextReview(statuses));
   if (mastered.length) return { skill: mastered[0], mode: "review" };
@@ -644,20 +831,65 @@ export function chooseSkillForBlock(pool: Skill[], statuses: ProgressMap, now: D
 }
 
 /**
- * Friday "mix-up": mastered skills, most overdue first, up to `max`. With
- * `reopenWeakest` (last Friday of the month) the weakest skills (lowest window
- * accuracy) lead the list — the silent monthly reopen.
+ * Friday "mix-up": mastered skills, most overdue first, up to `max`, ONE SKILL
+ * PER GENERATOR (no generator twice; a second skill on a generator is left
+ * out rather than served as the same item type again). With `reopenWeakest`
+ * (last Friday of the month) the weakest skills (lowest window accuracy, one
+ * per generator) lead the list — the silent monthly reopen.
  */
 export function mixupSkills(catalog: Skill[], statuses: ProgressMap, max = MIXUP_SET_SIZE, reopenWeakest = 0): Skill[] {
   const mastered = catalog.filter((s) => statuses[s.id]?.status === "mastered").sort(byNextReview(statuses));
   const weakest =
     reopenWeakest > 0
-      ? mastered
-          .slice()
-          .sort((a, b) => windowAccuracy(statuses[a.id].window) - windowAccuracy(statuses[b.id].window) || byNextReview(statuses)(a, b))
-          .slice(0, reopenWeakest)
+      ? distinctGenerators(
+          mastered
+            .slice()
+            .sort((a, b) => windowAccuracy(statuses[a.id].window) - windowAccuracy(statuses[b.id].window) || byNextReview(statuses)(a, b))
+        ).slice(0, reopenWeakest)
       : [];
-  return [...weakest, ...mastered.filter((s) => !weakest.includes(s))].slice(0, max);
+  return distinctGenerators([...weakest, ...mastered.filter((s) => !weakest.includes(s))]).slice(0, max);
+}
+
+/**
+ * True for a Friday mix-up block (it carries skillIds), whatever the number of
+ * skills in it. A mix-up's results update each skill's window and streak ONLY
+ * (applyResult in review mode): they NEVER advance, halve or demote a spaced
+ * review interval (no applyReviewSet), however many mastered skills it covers
+ * and even when it ended up with a single skill. The player decides mix-up
+ * grading with this, never with `skills.length > 1`.
+ */
+export function isMixupBlock(block: Pick<MissionBlock, "skillIds"> | null | undefined): boolean {
+  return !!block && Array.isArray(block.skillIds);
+}
+
+export interface BrainRotationDay {
+  /** CogAT family of the day */
+  family: "verbal" | "spatial" | "quantitative" | "figural";
+  /** parent-facing label */
+  label: string;
+  /** reasoning generator ids of the family */
+  generators: readonly string[];
+}
+
+/**
+ * Weekday brain rotation (design §9, parent guides), keyed by weekdayIndexMon
+ * (0 = Monday). Friday is the mix-up and weekends are free choice, so they have
+ * no entry.
+ */
+export const BRAIN_ROTATION: Readonly<Record<number, BrainRotationDay>> = {
+  0: { family: "verbal", label: "Verbal: analogies, classification, sentences", generators: ["r.verbalAnalogies", "r.verbalClassification", "r.sentenceCompletion"] },
+  1: { family: "spatial", label: "Paper folding and rotation", generators: ["r.paperFolding", "r.mentalRotation"] },
+  2: { family: "quantitative", label: "Number puzzles: series, analogies, puzzles", generators: ["r.numberSeries", "r.numberAnalogies", "r.numberPuzzles"] },
+  3: {
+    family: "figural",
+    label: "Figures and logic: matrices, classification, series, patterns, logic",
+    generators: ["r.figureMatrix", "r.figureClassification", "r.figureSeries", "r.patternCompletion", "r.oddOneOut", "r.sudoku4", "r.logicGrid"],
+  },
+};
+
+/** Today's brain-rotation family (Mon-Thu), or null on Friday and weekends. */
+export function brainRotationFor(date: string): BrainRotationDay | null {
+  return BRAIN_ROTATION[weekdayIndexMon(date)] ?? null;
 }
 
 export interface PlanOptions {
@@ -677,10 +909,23 @@ export function reviewCapFor(date: string): number {
  * or more blocks: its due 4-item review sets first (reviews before new
  * learning, see the header for the caps), then the new-skill portion with the
  * remaining minutes. Works with any catalog (pass `catalogFor(slug)`), respects
- * settings.blocks / settings.weekend minutes and settings.targetGrade, never
- * plans the same generator twice for new learning, turns Friday's brain block
- * into the mix-up and offers the skip check on weekends only. `today` is the
- * YYYY-MM-DD date in the family timezone (derived from `now` when omitted).
+ * settings.blocks / settings.weekend minutes and settings.targetGrade. Due
+ * reviews are pause-aware (isReviewDueOn with `settings`).
+ *
+ * No generator twice in a mission: review sets, the new skill and the mix-up
+ * each take a generator once. A due set whose generator is already planned
+ * tonight waits for the next night (it stays due). When a due set shares the
+ * generator of the block's new skill (typically the prerequisite of the skill
+ * that just unlocked), the next due set takes its place; when there is none,
+ * the review waits and the new skill keeps its slot. A school night with three
+ * due sets (one per generator) still drops the new skill for them.
+ *
+ * Friday's brain block is the mix-up when at least MIXUP_MIN_SKILLS mastered
+ * skills on unused generators exist; otherwise it is planned like any other
+ * night's brain block. Mon-Thu the brain block's new skill prefers the
+ * weekday's reasoning family (BRAIN_ROTATION), else any eligible reasoning
+ * skill. The skip check is offered on weekends only. `today` is the YYYY-MM-DD
+ * date in the family timezone (derived from `now` when omitted).
  */
 export function planMission(
   catalog: Skill[],
@@ -699,7 +944,7 @@ export function planMission(
   const cap = reviewCapFor(date);
   const usedGenerators = new Set<string>();
   const usedSkills = new Set<string>();
-  const sortDue = byNextReview(statuses);
+  const sortDue = byEffectiveReview(statuses, date, settings);
 
   for (const kind of BLOCK_ORDER) {
     const planned = weekend ? (settings.weekend?.[kind] ?? settings.blocks?.[kind]) : settings.blocks?.[kind];
@@ -712,7 +957,7 @@ export function planMission(
       const size = last ? MIXUP_LAST_FRIDAY_SIZE : MIXUP_SET_SIZE;
       const mixPool = catalog.filter((s) => !usedGenerators.has(s.generator) && !usedSkills.has(s.id));
       const mix = mixupSkills(mixPool, statuses, size, last ? MIXUP_REOPEN_WEAKEST : 0);
-      if (mix.length > 0) {
+      if (mix.length >= MIXUP_MIN_SKILLS) {
         for (const s of mix) usedGenerators.add(s.generator);
         blocks.push({
           kind,
@@ -727,24 +972,56 @@ export function planMission(
         });
         continue;
       }
+      // Fewer than 2 skills left for a mix-up: tonight's brain block is an ordinary one (below).
     }
 
     const reviewOnly = reviewOnlyDay || (kind === "math" && !!opts.mathReviewOnly);
-    const due = subjectPool.filter((s) => !usedSkills.has(s.id) && isReviewDue(statuses[s.id], now)).sort(sortDue);
+    const due = subjectPool.filter((s) => !usedSkills.has(s.id) && isReviewDueOn(statuses[s.id], date, settings)).sort(sortDue);
+    // One due set per generator, never on a generator an earlier block planned; the rest stay due for the next night.
+    const dueSets = distinctGenerators(due, usedGenerators);
+
+    const target =
+      kind === "math"
+        ? settings.targetGrade?.math
+        : kind === "reading"
+          ? settings.targetGrade?.reading
+          : settings.targetGrade?.reasoning;
+
+    let pool = subjectPool.filter((s) => !usedSkills.has(s.id));
+    if (kind === "reading") {
+      const writing = pool.filter((s) => s.subject === "writing" && ["ready", "learning"].includes(statuses[s.id]?.status ?? ""));
+      // Writing prompts are a weekly thing: prefer them on the writing day, skip them otherwise.
+      pool = friday && writing.length ? writing : pool.filter((s) => s.subject !== "writing");
+    }
+    const graded = typeof target === "number" ? pool.filter((s) => s.grade <= target) : pool;
+    const scoped = graded.length ? graded : pool;
+
+    // Tonight's new skill (before the review sets, so a same-generator due set cannot knock it out).
+    let candidate: Choice | null = null;
+    if (!reviewOnly) {
+      const freshPool = scoped.filter((s) => !usedGenerators.has(s.generator));
+      const rotation = kind === "brain" ? brainRotationFor(date) : null;
+      if (rotation) candidate = learnableChoice(freshPool.filter((s) => rotation.generators.includes(s.generator)), statuses);
+      candidate = candidate ?? learnableChoice(freshPool, statuses);
+    }
+
     let sets: Skill[];
     let learn: boolean;
     if (reviewOnly) {
-      sets = due.slice(0, weekend || friday ? cap : REVIEW_REPLACE_AT);
+      sets = dueSets.slice(0, weekend || friday ? cap : REVIEW_REPLACE_AT);
       if (sets.length === 0) {
-        const bonus = subjectPool.filter((s) => !usedSkills.has(s.id) && statuses[s.id]?.status === "mastered").sort(sortDue)[0];
+        const left = subjectPool.filter((s) => !usedSkills.has(s.id) && statuses[s.id]?.status === "mastered").sort(sortDue);
+        const bonus = left.find((s) => !usedGenerators.has(s.generator)) ?? left[0];
         if (bonus) sets = [bonus];
       }
       learn = false;
-    } else if (!weekend && !friday && due.length >= REVIEW_REPLACE_AT) {
-      sets = due.slice(0, REVIEW_REPLACE_AT);
+    } else if (!weekend && !friday && dueSets.length >= REVIEW_REPLACE_AT) {
+      sets = dueSets.slice(0, REVIEW_REPLACE_AT);
       learn = false;
     } else {
-      sets = due.slice(0, cap);
+      // A due set on the new skill's generator gives way to the next due set; with none left it waits a night.
+      const newGenerator = candidate?.skill.generator;
+      sets = dueSets.filter((s) => s.generator !== newGenerator).slice(0, cap);
       learn = true;
     }
     let learnMinutes = learn ? minutes - sets.length * REVIEW_SET_MINUTES : 0;
@@ -769,24 +1046,13 @@ export function planMission(
     }
     if (!learn) continue;
 
-    const target =
-      kind === "math"
-        ? settings.targetGrade?.math
-        : kind === "reading"
-          ? settings.targetGrade?.reading
-          : settings.targetGrade?.reasoning;
-
-    let pool = subjectPool.filter((s) => !usedSkills.has(s.id));
-    if (kind === "reading") {
-      const writing = pool.filter((s) => s.subject === "writing" && ["ready", "learning"].includes(statuses[s.id]?.status ?? ""));
-      // Writing prompts are a weekly thing: prefer them on the writing day, skip them otherwise.
-      pool = friday && writing.length ? writing : pool.filter((s) => s.subject !== "writing");
+    let choice = candidate;
+    if (!choice) {
+      // Nothing ready or learning on a free generator: a bonus review (or, failing that, any skill).
+      const left = scoped.filter((s) => !usedSkills.has(s.id));
+      const fresh = left.filter((s) => !usedGenerators.has(s.generator));
+      choice = chooseSkillForBlock(fresh.length ? fresh : left, statuses, now, true, settings, date);
     }
-    const graded = typeof target === "number" ? pool.filter((s) => s.grade <= target) : pool;
-    const scoped = graded.length ? graded : pool;
-    const fresh = scoped.filter((s) => !usedGenerators.has(s.generator));
-
-    const choice = chooseSkillForBlock(fresh.length ? fresh : scoped, statuses, now, true);
     if (!choice) continue;
     usedGenerators.add(choice.skill.generator);
     usedSkills.add(choice.skill.id);
@@ -852,12 +1118,40 @@ export function isFridayFree(sessions: SessionRecord[], date: string): boolean {
  * not done yet). Skipped / vacation / partial days, paused days, weekend days
  * and a Friday Free FREEZE the count (stepped over, not reset); days before the
  * first session end the walk; a school night with nothing done breaks it.
+ * Same walk as streakInfo (without a loaded window); kept for compatibility.
  */
 export function streakFromSessions(sessions: SessionRecord[], today: string, settings?: PauseSettings | null): number {
+  return streakInfo(sessions, today, settings).streak;
+}
+
+export interface StreakInfo {
+  /** consecutive done days (the streakFromSessions rule) */
+  streak: number;
+  /**
+   * true when the walk ended on a real break (a school night with nothing done)
+   * or at the start of the learner's history; false when it ran past
+   * `loadedFrom` without a break — older sessions that were not loaded could
+   * make the streak longer (it is then a lower bound: load more and recompute).
+   */
+  complete: boolean;
+}
+
+/**
+ * The streak plus whether it is complete. Pass `loadedFrom`, the lower date
+ * bound of the sessions query, whenever `sessions` is a window (e.g. the last
+ * 60 days); every session on or after it must be included. The walk then
+ * continues below the oldest row down to `loadedFrom` (an empty school night
+ * there breaks it), and reaching `loadedFrom` unbroken gives complete = false.
+ * Without `loadedFrom` the sessions are taken as the whole history: days before
+ * the first session end the walk and the result is complete.
+ */
+export function streakInfo(sessions: SessionRecord[], today: string, settings?: PauseSettings | null, loadedFrom?: string | null): StreakInfo {
   const byDate = new Map<string, SessionRecord>();
   for (const s of sessions) byDate.set(s.date, s);
-  if (byDate.size === 0) return 0;
-  const first = [...byDate.keys()].sort()[0];
+  if (byDate.size === 0 && !loadedFrom) return { streak: 0, complete: true };
+  const first = [...byDate.keys()].sort()[0] ?? today;
+  // With a window, the walk may go below the oldest row (those days are known to be empty) down to the window's start.
+  const floor = loadedFrom && loadedFrom < first ? loadedFrom : first;
   const isFrozen = (date: string, s: SessionRecord | undefined) =>
     (s ? s.status === "skipped" || s.status === "vacation" || s.status === "partial" : false) ||
     isWeekend(date) ||
@@ -866,16 +1160,16 @@ export function streakFromSessions(sessions: SessionRecord[], today: string, set
 
   let streak = 0;
   let cursor = today;
-  for (let i = 0; i < 400; i++) {
-    if (cursor < first) break;
+  for (let i = 0; i < MAX_DAY_WALK; i++) {
+    if (cursor < floor) return { streak, complete: !loadedFrom };
     const s = byDate.get(cursor);
     if (s && isDoneSession(s)) streak += 1;
     else if (cursor === today || isFrozen(cursor, s)) {
       // today not finished yet, or a frozen day: neither counts nor breaks
-    } else break;
+    } else return { streak, complete: true };
     cursor = addDaysToDateStr(cursor, -1);
   }
-  return streak;
+  return { streak, complete: false };
 }
 
 /** planned → partial → done, from the blocks. */

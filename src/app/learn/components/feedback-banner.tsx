@@ -15,7 +15,10 @@ interface FeedbackBannerProps {
   onAskCoach?: () => void;
   /** how the child got there; "hint" / "taught" change the wording and halve XP */
   helpLevel?: HelpLevel;
-  /** parent chip "I helped" → marks the item taught (half XP, not in the mastery window) */
+  /**
+   * Grown-up chip "A grown-up helped": toggles the item taught (half XP, a miss in
+   * the mastery window) and back, until Next is tapped.
+   */
   onTaught?: () => void;
   /** read the feedback aloud (never used for the question's answer before answering) */
   speak?: boolean;
@@ -57,6 +60,22 @@ export default function FeedbackBanner({
           role="status"
           aria-live="polite"
         >
+          {/* Grown-up chip: at the TOP of the banner, far from Next, 44px tall, and a toggle (undo until Next). */}
+          {onTaught && (
+            <div className="-mt-1 mb-3 flex">
+              <button
+                type="button"
+                onClick={onTaught}
+                aria-pressed={helpLevel === "taught"}
+                className={`tab-press inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-4 text-sm font-bold ${
+                  helpLevel === "taught" ? "border-violet-300 bg-violet-100 text-violet-800" : "border-slate-200 bg-white/80 text-slate-500"
+                }`}
+              >
+                {helpLevel === "taught" ? "✓ A grown-up helped · tap to undo" : "👋 A grown-up helped"}
+              </button>
+            </div>
+          )}
+
           <div className="flex items-start gap-3">
             <span className="animate-pop text-3xl leading-none" aria-hidden>
               {correct ? (helpLevel === "independent" ? "🎉" : "👍") : "💡"}
@@ -83,23 +102,7 @@ export default function FeedbackBanner({
             {speak && <SpeakButton text={speech} />}
           </div>
 
-          {onTaught && (
-            <div className="mt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={onTaught}
-                disabled={helpLevel === "taught"}
-                aria-pressed={helpLevel === "taught"}
-                className={`tab-press inline-flex min-h-[36px] items-center gap-1 rounded-full border px-3 text-xs font-bold ${
-                  helpLevel === "taught" ? "border-violet-300 bg-violet-100 text-violet-800" : "border-slate-200 bg-white text-slate-500"
-                }`}
-              >
-                {helpLevel === "taught" ? "✓ Parent helped" : "👋 I helped (parent)"}
-              </button>
-            </div>
-          )}
-
-          <div className={`mt-3 grid gap-2 ${onAskCoach ? "grid-cols-[1fr_auto]" : "grid-cols-1"}`}>
+          <div className={`mt-4 grid gap-2 ${onAskCoach ? "grid-cols-[1fr_auto]" : "grid-cols-1"}`}>
             <button
               type="button"
               onClick={onNext}

@@ -1,8 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import { loadTonightBundleServer } from "@/lib/learn/server";
+import { kidSlugForLoginServer, learnLoadErrorPage, loadTonightBundleServer, type TonightKidBundle } from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
-import { kidSlugForEmail } from "@/lib/learn/stats";
 import { coachEnabled } from "@/lib/learn/coach";
 import TonightView, { type TonightKid } from "./tonight-view";
 
@@ -19,11 +18,21 @@ export default async function TonightPage() {
     redirect("/login");
   }
 
-  const kidSlug = kidSlugForEmail(user.email);
+  let kidSlug: string | null;
+  try {
+    kidSlug = await kidSlugForLoginServer(user.email);
+  } catch (e) {
+    return learnLoadErrorPage(e, "/learn/tonight");
+  }
   if (kidSlug) redirect(`/learn/${kidSlug}`);
 
   const today = todayInFamilyTz();
-  const bundles = await loadTonightBundleServer(today);
+  let bundles: TonightKidBundle[];
+  try {
+    bundles = await loadTonightBundleServer(today);
+  } catch (e) {
+    return learnLoadErrorPage(e, "/learn/tonight");
+  }
   // Youngest first: the rotation opens each block with Lily (design §2.1).
   const kids: TonightKid[] = bundles
     .map((b) => ({ learner: b.learner, progressRows: b.progress, sessions: b.sessions, notes: b.notes, weekRewards: b.weekRewards }))

@@ -77,11 +77,11 @@ export default function TilesInput({ tiles, slots, disabled = false, answered = 
       </div>
 
       {/* Tiles */}
-      <div className="mt-4 flex flex-wrap justify-center gap-2" role="group" aria-label="Tiles">
+      <div className={`mt-4 flex flex-wrap justify-center ${speakTiles ? "gap-x-4 gap-y-3" : "gap-2"}`} role="group" aria-label="Tiles">
         {tiles.map((t, i) => {
           const isUsed = used.has(i);
           return (
-            <div key={i} className="flex items-center gap-1">
+            <div key={i} className="flex items-center gap-2">
               <button
                 type="button"
                 disabled={locked || isUsed}
@@ -93,7 +93,8 @@ export default function TilesInput({ tiles, slots, disabled = false, answered = 
               >
                 {t}
               </button>
-              {speakTiles && !isUsed && !locked && <SpeakButton text={t} small />}
+              {/* 44px speaker, 8px from the tile, so aiming for it never drops the tile */}
+              {speakTiles && !isUsed && !locked && <SpeakButton text={t} className="flex-shrink-0" />}
             </div>
           );
         })}

@@ -6,7 +6,6 @@ import type {
   BlockKind,
   HelpLevel,
   Learner,
-  Option,
   PracticeMode,
   ProgressMap,
   Question,
@@ -35,8 +34,9 @@ import {
   countsAsIndependent,
   deriveStatuses,
   isGuess,
+  isMixupBlock,
   isPaused,
-  isReviewDue,
+  isReviewDueOn,
   isStuck,
   markNeedsHelp,
   mergeProgress,
@@ -55,6 +55,8 @@ import {
 import { answerText, gradeAnswer } from "@/lib/learn/grade";
 import {
   POINTS,
+  formatClockLabel,
+  isWeekend,
   pointReason,
   pointsAllowed,
   ponyNameChoices,
@@ -68,8 +70,9 @@ import {
   xpReason,
   type PointKind,
 } from "@/lib/learn/stats";
-import { addReward, awardPoints, logAttempt, newClientId, saveProgress, upsertSession } from "@/lib/learn/store";
-import { namePony, type LearnNote } from "@/lib/learn/store-notes";
+import { newClientId } from "@/lib/learn/store";
+import type { LearnNote } from "@/lib/learn/store-notes";
+import { pendingOverlay } from "@/lib/learn/write-queue";
 import type { CoachQuestion } from "@/lib/learn/coach-types";
 import QuestionCard from "../../components/question-card";
 import FeedbackBanner from "../../components/feedback-banner";
@@ -78,6 +81,7 @@ import IntroCard from "../../components/intro-card";
 import CoachSheet from "../../components/coach-sheet";
 import { useCoach } from "../../components/use-coach";
 import { useMounted } from "../../components/use-mounted";
+import { DROPPED_MESSAGE, useWriteQueue } from "../../components/use-write-queue";
 import { speakNow } from "../../components/speak-button";
 
 interface PlayViewProps {
@@ -148,6 +152,8 @@ interface Answered {
   xp: number;
   /** the independent (first) answer on this item was wrong */
   firstTryWrong: boolean;
+  /** set while "A grown-up helped" is on: the help level and XP to restore when it is tapped off */
+  beforeTaught?: { helpLevel: HelpLevel; xp: number };
 }
 
 interface ItemResult {
@@ -156,7 +162,11 @@ interface ItemResult {
   /** entered the mastery window as true */
   independent: boolean;
   helpLevel: HelpLevel;
-  firstMiss: boolean;
+  /**
+   * TRUE = the first (independent) answer on this item was right. This is the
+   * polarity isStuck() expects: it fires after three FALSE in a row.
+   */
+  firstTryCorrect: boolean;
   /** item XP before replay decay (1 / 0.5 / 0) */
   xp: number;
   prompt: string;
@@ -186,6 +196,16 @@ const localSets = new Map<string, number>();
 const localPointRows: RewardRecord[] = [];
 
 const SUBJECTS: Subject[] = ["math", "reading", "phonics", "reasoning", "writing"];
+
+/** A frozen / throttled tab never adds more than this per timer tick. */
+const MAX_TICK_MS = 5000;
+
+/** Self-checked writing: the child's own text is stored as the answer (capped). */
+const SELF_CHECK_TEXT_MAX = 2000;
+
+function selfCheckAnswer(text: string, ok: boolean): string {
+  return text.trim().slice(0, SELF_CHECK_TEXT_MAX) || (ok ? "self-check: yes" : "self-check: not yet");
+}
 
 function kindForSubject(subject: Subject): BlockKind {
   if (subject === "math") return "math";
@@ -229,41 +249,40 @@ function coachQuestion(q: Question, raw?: string): CoachQuestion {
   };
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** Drop every sentence of `text` that names one of the (word) option labels. */
-function withoutOptionLabels(text: string, options: Option[]): string {
-  const labels = options.map((o) => (o.label ?? "").trim().toLowerCase()).filter((l) => /[a-z]/i.test(l));
-  if (labels.length === 0) return text;
-  const named = new RegExp(`(^|[^a-z0-9])(${labels.map(escapeRegExp).join("|")})(?=$|[^a-z0-9])`, "i");
-  return (text.match(/[^.!?]+[.!?]*/g) ?? [text]).filter((sentence) => !named.test(sentence)).join("").trim();
-}
-
 /**
- * Text AUTO-spoken for a prompt: never the answer (generators keep display.speak
- * answer-free; the selfcheck asserts it), never a whole passage (the passage has
- * its own "Read it to me" button, so only the short question is spoken) and never
- * the option labels of a choice item (each word option has its own speaker).
+ * Text AUTO-spoken for a prompt: display.speak exactly as the generator wrote it
+ * (else the prompt). Generators decide what is safe to hear: decoding items never
+ * speak their answer (scripts/phonics-check.mts asserts it), while sight words,
+ * rhymes and sound sorts speak the target on purpose, and reasoning / math items
+ * speak their premises. A passage is never auto-read whole (it has its own
+ * "Read it to me" button): only the question prompt is spoken.
  */
 function promptSpeech(q: Question): string {
   if (q.display?.passage) return q.prompt;
-  const text = q.display?.speak ?? q.prompt;
-  if (q.type !== "choice") return text;
-  return withoutOptionLabels(text, q.options) || q.prompt;
+  return q.display?.speak ?? q.prompt;
 }
 
-function buildRun(props: PlayViewProps): Run | RunMessage {
-  const { learner, progressRows, sessions, notes, today, nowIso, blockParam, skillParam, modeParam, subjectParam } = props;
+/** Writes still waiting in the local queue (write-queue.ts) that the server props do not have yet. */
+interface PendingState {
+  progress: SkillProgress[];
+  session: SessionRecord | null;
+}
+
+function buildRun(props: PlayViewProps, pending?: PendingState): Run | RunMessage {
+  const { learner, sessions, notes, today, nowIso, blockParam, skillParam, modeParam, subjectParam } = props;
   const catalog = catalogFor(learner.slug);
+  // A queued progress row is newer than the server's copy of that skill (mergeProgress: later rows win).
+  const progressRows = pending && pending.progress.length > 0 ? [...props.progressRows, ...pending.progress] : props.progressRows;
   const progressMap = mergeProgress(catalog, progressRows);
   const now = new Date(nowIso);
 
-  const cached = sessionCache.get(`${learner.id}:${today}`);
   const fromServer = sessionForDate(sessions, today);
   const doneCount = (s: SessionRecord | null | undefined) => s?.blocks.filter((b) => b.done).length ?? -1;
-  const session = cached && doneCount(cached) >= doneCount(fromServer) ? cached : fromServer;
+  // The freshest of the server row, a session row still in the write queue and this page-load's cache.
+  const session = [pending?.session, sessionCache.get(`${learner.id}:${today}`)].reduce<SessionRecord | null>(
+    (best, s) => (s && doneCount(s) >= doneCount(best) ? s : best),
+    fromServer
+  );
   const sessionsNow = session ? [...sessions.filter((s) => s.date !== today), session] : sessions;
   const blocks: SessionBlock[] = todaysBlocks({ learner, catalog, progressMap, sessions: sessionsNow, now, today, notes });
 
@@ -292,6 +311,10 @@ function buildRun(props: PlayViewProps): Run | RunMessage {
     if (!skill) return { emoji: "🧭", message: `"${skillParam}" is not on ${learner.name}'s skill map.` };
     const progress = progressMap[skill.id];
     const mode = parseMode(modeParam) ?? (progress.status === "mastered" ? "review" : "learn");
+    // Skip checks are a weekend activity (design §3.11, the planner's weekend rule); the Skill Map only offers them on Sat/Sun.
+    if (mode === "test" && !isWeekend(today)) {
+      return { emoji: "📅", message: "Skip checks open on the weekend", body: `Practice ${skill.kidTitle} now, or try its skip check on Saturday or Sunday.` };
+    }
     const minutes = learner.settings.blocks[kindForSubject(skill.subject)] || skill.estMinutes;
     return { kind: "skill", skills: [skill], mode, minutes, blockIndex: null, offerTestOut: false, blocks, session, progressMap, catalog, placement: [] };
   }
@@ -333,7 +356,9 @@ function formatClock(totalSeconds: number): string {
 }
 
 // --- per-play seed counter: sessionStorage (survives a reload mid-block) with an
-// in-memory cache for private mode. Never derived from DB row counts.
+// in-memory cache for private mode. A new tab or device has no stored counter, so
+// the counter never starts below the skill's attempts at the start of the block:
+// the items seen on another device today were counted there, and are not replayed.
 const memoryCounters = new Map<string, number>();
 
 function readCounter(key: string): number {
@@ -354,23 +379,25 @@ function writeCounter(key: string, n: number): void {
   }
 }
 
-/** Current counter value for (slug, skill, date), then advance it. */
-function takeCounter(slug: string, skillId: string, today: string): number {
+/** Current counter value for (slug, skill, date) — at least `floor` (the skill's attempts) — then advance it. */
+function takeCounter(slug: string, skillId: string, today: string, floor: number): number {
   const key = questionCounterKey(slug, skillId, today);
-  const n = memoryCounters.get(key) ?? readCounter(key);
+  const stored = memoryCounters.get(key) ?? readCounter(key);
+  const n = Math.max(stored, Number.isFinite(floor) ? Math.max(0, Math.floor(floor)) : 0);
   memoryCounters.set(key, n + 1);
   writeCounter(key, n + 1);
   return n;
 }
 
 /**
- * Build the next item: seed = hash(slug | skill | mode | date | n); the stored seed is the one actually used.
- * The generator also gets params.attempt = `attempts` (the skill's attempts when the block started) + n,
- * so content-backed generators (reading passages, verbal banks) can cycle their pool instead of repeating.
+ * Build the next item: seed = hash(slug | skill | mode | date | n) with n = max(this tab's counter, the
+ * skill's attempts when the block started); the stored seed is the one actually used. The generator also
+ * gets params.attempt = n (never below the attempts), so content-backed generators (reading passages,
+ * verbal banks) walk their pool continuously across blocks, days and devices instead of repeating.
  */
 function makeItemFor(slug: string, today: string, skill: Skill, m: PracticeMode, previous: Question | null, attempts = 0): Item {
-  const n = takeCounter(slug, skill.id, today);
-  const withAttempt: Skill = { ...skill, params: { ...skill.params, attempt: attempts + n } };
+  const n = takeCounter(slug, skill.id, today, attempts);
+  const withAttempt: Skill = { ...skill, params: { ...skill.params, attempt: n } };
   let seed = questionSeed(slug, skill.id, m, today, n);
   let q = makeQuestion(withAttempt, seed);
   // Avoid showing the exact same item twice in a row.
@@ -406,7 +433,14 @@ function MessageCard({ emoji, title, body, href, label }: { emoji: string; title
 export default function PlayView(props: PlayViewProps) {
   const { learner, today, coachEnabled, returnParam, introParam } = props;
   const mounted = useMounted();
-  const [run] = useState(() => buildRun(props));
+  // The server render and hydration use the server props only (the same markup on both sides). Once
+  // mounted, the player also folds in writes still waiting in the local queue (a reload before they
+  // landed), so a finished block is not offered again and a skill's progress never steps back.
+  const [serverRun] = useState(() => buildRun(props));
+  const [clientRun] = useState(() =>
+    typeof window === "undefined" ? null : buildRun(props, pendingOverlay(props.learner.slug, props.learner.id, props.today))
+  );
+  const run = mounted && clientRun ? clientRun : serverRun;
   const backHref = returnParam === "tonight" ? "/learn/tonight" : `/learn/${learner.slug}`;
   const backLabel = returnParam === "tonight" ? "Back to Tonight" : "Back to Mission Control";
 
@@ -466,7 +500,9 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
   const autoSpeak = settings.autoSpeak;
   const early = learner.grade <= 2;
   const isPlacement = run.kind === "placement";
-  const isMixup = run.skills.length > 1;
+  // Decided by the block, not the skill count: a Friday mix-up the planner filled with ONE mastered
+  // skill still only updates windows and streaks — it never advances or halves the review interval.
+  const isMixup = run.blockIndex !== null && isMixupBlock(run.blocks[run.blockIndex]);
   const primarySkill = run.skills[0];
   const [initialStatuses] = useState<Record<string, SkillStatus>>(() =>
     Object.fromEntries([...run.skills, ...run.placement].map((s) => [s.id, run.progressMap[s.id]?.status ?? "ready"]))
@@ -519,8 +555,6 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
   const [slowDown, setSlowDown] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [finished, setFinished] = useState<Finished | null>(null);
-  const [pendingWrites, setPendingWrites] = useState(0);
-  const [saveError, setSaveError] = useState(false);
   // placement sprint
   const [sprintIndex, setSprintIndex] = useState(0);
   const [sprintFails, setSprintFails] = useState(0);
@@ -528,9 +562,10 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
   /** 5, or 10 once a probe came back 4/5 (the pair must reach 9/10) */
   const [probeTarget, setProbeTarget] = useState(TEST_OUT_ITEMS);
 
-  const startRef = useRef(0);
+  /** active (visible) practice time banked so far, and when it was last banked */
+  const activeMsRef = useRef(0);
+  const lastTickRef = useRef(0);
   const questionStartRef = useRef(0);
-  const failedRef = useRef<Array<() => Promise<unknown>>>([]);
   const guessStreakRef = useRef(0);
   /** set by every in-gesture speak, so the arrival effect never re-speaks over it */
   const spokenFirstRef = useRef(false);
@@ -566,15 +601,40 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
   // Only a learn block ends by the clock; review sets, mix-ups and skip checks run their fixed count.
   const timeUp = !isPlacement && mode === "learn" && elapsed >= limitSeconds;
 
-  // Block timer (soft): ticks once a second while practicing.
+  // Block timer (soft): counts ACTIVE time only. It pauses while the page is hidden (phone locked, app in
+  // the background) and resumes when it is visible again; one tick never adds more than MAX_TICK_MS, so a
+  // frozen tab cannot either. Time's up and minutes_spent both use this clock.
+  const playing = phase === "question" || phase === "feedback";
   useEffect(() => {
-    if (phase !== "question" && phase !== "feedback") return;
-    if (!startRef.current) startRef.current = Date.now();
-    const id = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    if (!playing) return;
+    const visible = () => document.visibilityState !== "hidden";
+    const bank = (count: boolean) => {
+      const now = Date.now();
+      if (count) activeMsRef.current += Math.min(Math.max(0, now - lastTickRef.current), MAX_TICK_MS);
+      lastTickRef.current = now;
+    };
+    lastTickRef.current = Date.now();
+    const id = window.setInterval(() => {
+      bank(visible());
+      setElapsed(Math.floor(activeMsRef.current / 1000));
     }, 1000);
-    return () => clearInterval(id);
-  }, [phase]);
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") bank(true); // bank up to the moment it was hidden, then pause
+      else lastTickRef.current = Date.now(); // resume: the hidden span never counts
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      bank(visible());
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [playing]);
+
+  /** Active seconds right now (banked time plus the running tick). */
+  const activeSeconds = useCallback(() => {
+    const running = lastTickRef.current && document.visibilityState !== "hidden" ? Math.min(Math.max(0, Date.now() - lastTickRef.current), MAX_TICK_MS) : 0;
+    return Math.floor((activeMsRef.current + running) / 1000);
+  }, []);
 
   // Per-question stopwatch (for learn_attempts.ms); the retry keeps the original start.
   useEffect(() => {
@@ -594,43 +654,15 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
     speakNow(promptSpeech(item.question));
   }, [autoSpeak, item, phase]);
 
-  // Optimistic persistence with a retry queue.
-  const persist = useCallback((fn: () => Promise<unknown>) => {
-    setPendingWrites((n) => n + 1);
-    fn()
-      .catch(() => {
-        failedRef.current.push(fn);
-        setSaveError(true);
-      })
-      .finally(() => setPendingWrites((n) => Math.max(0, n - 1)));
-  }, []);
-
-  // Progress writes for one skill must land in order: the last item's per-item save and the
-  // block's final fold (review set, skip check, stuck flag) used to race, and the stale one could
-  // win (losing needs_help or the new interval). Saves run one at a time and always send the
-  // latest state for the skill, so a retried write can never overwrite a newer one.
-  const latestProgressRef = useRef<Record<string, SkillProgress>>({});
-  const progressChainRef = useRef<Promise<unknown>>(Promise.resolve());
-  const saveSkill = useCallback(
-    (p: SkillProgress) => {
-      latestProgressRef.current[p.skillId] = p;
-      const id = p.skillId;
-      persist(() => {
-        const run = () => saveProgress(learner.id, latestProgressRef.current[id]);
-        const next = progressChainRef.current.then(run, run);
-        progressChainRef.current = next.catch(() => undefined);
-        return next;
-      });
-    },
-    [persist, learner.id]
-  );
-
-  const retryFailed = useCallback(() => {
-    const queue = failedRef.current;
-    failedRef.current = [];
-    setSaveError(false);
-    for (const fn of queue) persist(fn);
-  }, [persist]);
+  // Every write goes through the learner's persistent queue (localStorage, write-queue.ts): it is sent
+  // at once, kept until Supabase accepts it, and retried on load, on 'online', on return to the tab and
+  // after each block. Writes are idempotent (client ids / upserts), so a replay never double-counts.
+  // Progress for one skill keeps only its LATEST state in the queue and the queue runs in order, so the
+  // last item's save and the block's final fold (review set, skip check, stuck flag) cannot race.
+  const saves = useWriteQueue(learner.slug);
+  const queueWrite = saves.enqueue;
+  const flushSaves = saves.flush;
+  const saveSkill = useCallback((p: SkillProgress) => void queueWrite({ op: "progress", learnerId: learner.id, progress: p }), [queueWrite, learner.id]);
 
   /** Start (or restart) the item stream in mode `m`, speaking the first prompt inside the caller's tap. */
   const beginItems = useCallback(
@@ -674,7 +706,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
           helpLevel: "independent" as const,
           clientId: newClientId(),
         };
-        persist(() => logAttempt(attempt));
+        queueWrite({ op: "attempt", attempt });
         const replacement = makeItem(item.skill, mode, q);
         if (autoSpeak) say(`Take your time. ${promptSpeech(replacement.question)}`);
         setItem(replacement);
@@ -699,11 +731,16 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       setAnswered({ raw, correct, helpLevel, hintUsed, ms, xp, firstTryWrong: retrying, forced: fastWrong });
       setPhase("feedback");
     },
-    [phase, item, mode, retrying, hintUsed, autoSpeak, isMixup, isPlacement, factor, learner.id, persist, makeItem, say]
+    [phase, item, mode, retrying, hintUsed, autoSpeak, isMixup, isPlacement, factor, learner.id, queueWrite, makeItem, say]
   );
 
-  const markTaught = useCallback(() => {
-    setAnswered((a) => (a ? { ...a, helpLevel: "taught", xp: xpFor(a.correct, "taught") * factor } : a));
+  /** "A grown-up helped": the item counts as taught (half XP, a miss in the window); a second tap undoes it until Next. */
+  const toggleTaught = useCallback(() => {
+    setAnswered((a) => {
+      if (!a) return a;
+      if (a.helpLevel === "taught" && a.beforeTaught) return { ...a, helpLevel: a.beforeTaught.helpLevel, xp: a.beforeTaught.xp, beforeTaught: undefined };
+      return { ...a, beforeTaught: { helpLevel: a.helpLevel, xp: a.xp }, helpLevel: "taught", xp: xpFor(a.correct, "taught") * factor };
+    });
   }, [factor]);
 
   /** Write the day's session row (mission runs only) and return it. A block that is already done is never written twice. */
@@ -723,10 +760,10 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
         skipReason: null,
       };
       sessionCache.set(`${learner.id}:${today}`, session);
-      persist(() => upsertSession(session));
+      queueWrite({ op: "session", session });
       return session;
     },
-    [run, learner.id, today, persist]
+    [run, learner.id, today, queueWrite]
   );
 
   const streakAfter = useCallback(
@@ -753,10 +790,10 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       if (allowed <= 0) return 0;
       const clientId = newClientId();
       localPointRows.push({ learnerId: learner.id, delta: allowed, reason: pointReason(kind, detail), clientId, createdAt: new Date().toISOString() });
-      persist(() => awardPoints(learner.id, kind, { today, detail, clientId }));
+      queueWrite({ op: "points", learnerId: learner.id, kind, today, detail, clientId });
       return allowed;
     },
-    [learner.id, weekRewards, today, persist]
+    [learner.id, weekRewards, today, queueWrite]
   );
 
   /** End a block or free run (not placement). */
@@ -780,7 +817,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
           nextMap = { ...map, [skill.id]: final };
           saveSkill(final);
         } else if (mode === "review" && prev.status === "mastered") {
-          reviewWasDue = isReviewDue(run.progressMap[skill.id], startedAt);
+          reviewWasDue = isReviewDueOn(run.progressMap[skill.id], today, settings);
           const final = applyReviewSet(prev, flags, now, reviewWasDue);
           nextMap = { ...map, [skill.id]: final };
           saveSkill(final);
@@ -800,7 +837,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       );
       localSets.set(setKey, setsBefore + 1);
       const correctCount = allResults.filter((r) => r.correct).length;
-      const minutesSpent = Math.max(1, Math.round(elapsed / 60));
+      const minutesSpent = Math.max(1, Math.round(activeSeconds() / 60));
 
       // Input points (design §4): a closed kind ("base"), starting on time, a completed review set.
       let points = 0;
@@ -829,8 +866,9 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       );
       if (totalXp > 0) {
         const clientId = newClientId();
-        persist(() => addReward(learner.id, totalXp, xpReason(isMixup ? "mixup" : mode, primarySkill.id), clientId));
+        queueWrite({ op: "reward", learnerId: learner.id, delta: totalXp, reason: xpReason(isMixup ? "mixup" : mode, primarySkill.id), clientId });
       }
+      void flushSaves();
 
       const blocks = session?.blocks ?? run.blocks;
       setProgressMap(nextMap);
@@ -850,7 +888,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       });
       setPhase(stuck ? "stuck" : "summary");
     },
-    [isMixup, primarySkill, mode, persist, saveSkill, learner.id, run, elapsed, writeSession, changesFor, streakAfter, startedAt, setsBefore, setKey, award, initialStatuses]
+    [isMixup, primarySkill, mode, queueWrite, flushSaves, saveSkill, learner.id, run, activeSeconds, writeSession, changesFor, streakAfter, startedAt, setsBefore, setKey, award, initialStatuses, today, settings]
   );
 
   /** Placement sprint: fold one finished probe (5 items, or the 10 of a pair), then continue or stop. */
@@ -874,7 +912,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       saveSkill(final);
       if (gained > 0) {
         const clientId = newClientId();
-        persist(() => addReward(learner.id, gained, xpReason("placement", skill.id), clientId));
+        queueWrite({ op: "reward", learnerId: learner.id, delta: gained, reason: xpReason("placement", skill.id), clientId });
       }
       const fails = passed ? 0 : sprintFails + 1;
       const log = [...sprintLog, { skill, passed, correct, total: skillResults.length, xp: gained }];
@@ -915,7 +953,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       setHintUsed(false);
       setPhase("question");
     },
-    [run.placement, run.catalog, sprintIndex, sprintFails, sprintLog, persist, saveSkill, learner.id, changesFor, streakAfter, makeItem, autoSpeak, say]
+    [run.placement, run.catalog, sprintIndex, sprintFails, sprintLog, queueWrite, saveSkill, learner.id, changesFor, streakAfter, makeItem, autoSpeak, say]
   );
 
   /** The tap that advances: commits the item, logs it, and speaks the next prompt inside the same gesture. */
@@ -930,11 +968,14 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
     const next = mode === "test" ? prev : applyResult(prev, input, now, mode);
     const nextMap = mode === "test" ? progressMap : { ...progressMap, [skill.id]: next };
 
+    // Self-checked writing: the answer is the child's text; the verdict also goes into the stored question
+    // JSON (`selfCheckVerdict`) next to the existing `selfCheck: true` item flag (rows.ts has no column for it).
+    const selfChecked = q.type === "text" && !!q.selfCheck;
     const attempt = {
       learnerId: learner.id,
       skillId: skill.id,
       mode,
-      question: q,
+      question: selfChecked ? ({ ...q, selfCheckVerdict: answered.correct ? "close" : "not-yet" } as Question) : q,
       answer: answered.raw,
       correct: answered.correct,
       ms: answered.ms,
@@ -943,7 +984,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       helpLevel: answered.helpLevel,
       clientId: newClientId(),
     };
-    persist(() => logAttempt(attempt));
+    queueWrite({ op: "attempt", attempt });
     if (mode !== "test") saveSkill(next);
 
     const result: ItemResult = {
@@ -951,7 +992,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       correct: answered.correct,
       independent: countsAsIndependent(input),
       helpLevel: answered.helpLevel,
-      firstMiss: answered.firstTryWrong || !answered.correct,
+      firstTryCorrect: answered.correct && !answered.firstTryWrong,
       xp: xpFor(answered.correct, answered.helpLevel),
       prompt: q.prompt,
     };
@@ -970,7 +1011,8 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
         }
       }
     } else {
-      const stuck = mode === "learn" && !isMixup && isStuck(allResults.map((r) => r.firstMiss));
+      // isStuck wants TRUE = first try right and fires after three FALSE (three first-try misses in a row).
+      const stuck = mode === "learn" && !isMixup && isStuck(allResults.map((r) => r.firstTryCorrect));
       if (stuck) {
         finish(allResults, nextMap, true);
         return;
@@ -997,7 +1039,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
     progressMap,
     mode,
     learner.id,
-    persist,
+    queueWrite,
     saveSkill,
     results,
     isPlacement,
@@ -1033,7 +1075,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
       <MessageCard
         emoji="🌙"
         title="Lights out soon — tomorrow is a fresh start"
-        body={`This ${run.minutes}-minute block can't finish before ${settings.stopBy}. Nothing carries over.`}
+        body={`This ${run.minutes}-minute block can't finish before ${formatClockLabel(settings.stopBy)}. Nothing carries over.`}
         href={backHref}
         label={backLabel}
       />
@@ -1178,7 +1220,7 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
               question={item.question}
               answered={answered}
               onSubmit={(raw) => submit(raw)}
-              onSelfCheck={(ok) => submit(ok ? "self-check: yes" : "self-check: not yet", ok)}
+              onSelfCheck={(ok, text) => submit(selfCheckAnswer(text, ok), ok)}
               index={Math.min(qIndex + 1, target)}
               total={target}
               hideCounter={early}
@@ -1246,12 +1288,11 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
               masteryChanges={finished.changes}
               confetti={finished.missionComplete || finished.changes.some((c) => c.to === "mastered")}
               primary={
-                pendingWrites > 0
-                  ? { label: "Saving…", href: "#" }
-                  : finished.nextBlockIndex >= 0
-                    ? { label: "Next block →", href: `${base}/play?block=${finished.nextBlockIndex}${returnQ}` }
-                    : { label: backLabel, href: backHref }
+                finished.nextBlockIndex >= 0
+                  ? { label: "Next block →", href: `${base}/play?block=${finished.nextBlockIndex}${returnQ}` }
+                  : { label: backLabel, href: backHref }
               }
+              save={{ state: saves.state, onRetry: () => void flushSaves() }}
               secondary={finished.nextBlockIndex >= 0 ? { label: backLabel, href: backHref } : { label: "Skill Map", href: `${base}/map` }}
               extra={
                 tutu && finished.newlyMastered.length > 0 ? (
@@ -1259,7 +1300,9 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
                     skills={finished.newlyMastered}
                     taken={Object.values(ponies)}
                     autoSpeak={autoSpeak}
-                    onName={(skill, name) => persist(() => namePony(learner.id, today, skill.id, name, skill.standards))}
+                    onName={(skill, name) =>
+                      queueWrite({ op: "pony", learnerId: learner.id, today, skillId: skill.id, name, standards: skill.standards, clientId: newClientId() })
+                    }
                   />
                 ) : undefined
               }
@@ -1277,19 +1320,26 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
           xp={answered.xp}
           nextLabel={isPlacement ? (sprintEnds ? "Finish" : probeDone ? "Next skill" : "Next") : isLast ? "Finish" : "Next"}
           onNext={handleNext}
-          onTaught={mode === "test" || isPlacement ? undefined : markTaught}
+          onTaught={mode === "test" || isPlacement ? undefined : toggleTaught}
           onAskCoach={coachEnabled && !answered.correct && !(item.question.type === "text" && item.question.selfCheck) ? askExplain : undefined}
         />
       )}
 
-      {saveError && (
+      {saves.state === "failed" && phase !== "summary" && (
         <div className="fixed inset-x-0 top-3 z-50 flex justify-center px-4">
-          <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-800 shadow-lg">
-            Couldn&apos;t save progress.
-            <button type="button" onClick={retryFailed} className="rounded-full bg-amber-600 px-3 py-1 text-xs font-bold text-white">
-              Retry
+          <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 py-1.5 pl-4 pr-1.5 text-sm font-semibold text-amber-800 shadow-lg" role="status">
+            Not saved yet — will retry.
+            <button type="button" onClick={() => void flushSaves()} className="min-h-[44px] rounded-xl bg-amber-600 px-4 text-sm font-bold text-white">
+              Retry now
             </button>
           </div>
+        </div>
+      )}
+      {saves.state === "dropped" && phase !== "summary" && (
+        <div className="pointer-events-none fixed inset-x-0 top-3 z-50 flex justify-center px-4">
+          <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-800 shadow-lg" role="status">
+            {DROPPED_MESSAGE}
+          </p>
         </div>
       )}
 

@@ -1,14 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound, redirect } from "next/navigation";
 import {
+  kidSlugForLoginServer,
+  learnLoadErrorPage,
   loadAttemptsServer,
-  loadLearnerBySlugServer,
+  loadLearnerServer,
   loadNotesServer,
   loadProgressServer,
   loadRecentSessionsServer,
 } from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
-import { kidSlugForEmail } from "@/lib/learn/stats";
 import { catalogFor } from "@/lib/learn/catalog";
 import { mergeProgress } from "@/lib/learn/mastery";
 import { buildSkillRows, placementSummary, sessionsSummary } from "@/lib/learn/report";
@@ -27,20 +28,37 @@ export default async function ReportPage({ params }: { params: Promise<{ slug: s
     redirect("/login");
   }
 
-  const kidSlug = kidSlugForEmail(user.email);
+  const { slug } = await params;
+  const here = `/learn/parent/report/${encodeURIComponent(slug)}`;
+  let kidSlug: string | null;
+  try {
+    kidSlug = await kidSlugForLoginServer(user.email);
+  } catch (e) {
+    return learnLoadErrorPage(e, here);
+  }
   if (kidSlug) redirect(`/learn/${kidSlug}`);
 
-  const { slug } = await params;
-  const learner = await loadLearnerBySlugServer(slug);
-  if (!learner) notFound();
-
+  // A pack printed for the school must not silently miss rows: any failed read → retry card.
   const today = todayInFamilyTz();
-  const [progressRows, sessions, notes, attempts] = await Promise.all([
-    loadProgressServer(learner.id),
-    loadRecentSessionsServer(learner.id, 365, today),
-    loadNotesServer(learner.id, "2020-01-01", today),
-    loadAttemptsServer(learner.id),
-  ]);
+  const load = async () => {
+    const learner = await loadLearnerServer(slug);
+    if (!learner) return null;
+    const [progressRows, sessions, notes, attempts] = await Promise.all([
+      loadProgressServer(learner.id),
+      loadRecentSessionsServer(learner.id, 365, today),
+      loadNotesServer(learner.id, "2020-01-01", today),
+      loadAttemptsServer(learner.id),
+    ]);
+    return { learner, progressRows, sessions, notes, attempts };
+  };
+  let loaded: Awaited<ReturnType<typeof load>>;
+  try {
+    loaded = await load();
+  } catch (e) {
+    return learnLoadErrorPage(e, here);
+  }
+  if (!loaded) notFound();
+  const { learner, progressRows, sessions, notes, attempts } = loaded;
 
   const catalog = catalogFor(slug);
   const progressMap = mergeProgress(catalog, progressRows);

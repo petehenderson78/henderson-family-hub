@@ -3,7 +3,20 @@
  * client views. Relative imports only (Node-importable: the self-check runs them).
  */
 
-import type { BlockKind, Learner, LearnerSettings, Mission, MissionBlock, ProgressMap, RewardRecord, SessionBlock, SessionRecord, Skill } from "./types";
+import type {
+  BlockKind,
+  Learner,
+  LearnerSettings,
+  Mission,
+  MissionBlock,
+  ProgressMap,
+  Question,
+  RewardRecord,
+  SessionBlock,
+  SessionRecord,
+  Skill,
+  SkillProgress,
+} from "./types";
 import {
   addDaysToDateStr,
   familyDateOfIso,
@@ -13,23 +26,35 @@ import {
   minutesSinceMidnightInFamilyTz,
   parseClock,
   previousSchoolDay,
+  todayInFamilyTz,
   weekDates,
 } from "./dates";
 import {
+  BLOCK_LABEL,
   BLOCK_ORDER,
+  BLOCK_SUBJECTS,
+  GUESS_MS,
+  REVIEW_SET_PASS,
+  REVIEW_SET_SIZE,
   isFridayFree,
+  isGuess,
   isPaused,
   isReviewDue,
+  isReviewDueOn,
   kindProgress,
+  lightWeekMode,
   minutesUntilStopBy,
   pauseEndDate,
   planMission,
   streakFromSessions,
+  streakInfo,
   windowAccuracy,
   type PauseSettings,
+  type StreakInfo,
 } from "./mastery";
 
-export { isPaused, isWeekend };
+export { isPaused, isWeekend, streakInfo };
+export type { StreakInfo };
 
 export type TodayStatus = "done" | "in-progress" | "not-started";
 
@@ -63,6 +88,15 @@ export function computeStreak(sessions: SessionRecord[], today: string, settings
   return streakFromSessions(sessions, today, settings ?? null);
 }
 
+/**
+ * The streak and whether it is complete (see streakInfo in the engine). Pass
+ * `loadedFrom` = the lower date bound of the sessions query; complete = false
+ * means the walk reached it unbroken and an older load could make it longer.
+ */
+export function computeStreakInfo(sessions: SessionRecord[], today: string, settings?: PauseSettings | null, loadedFrom?: string | null): StreakInfo {
+  return streakInfo(sessions, today, settings ?? null, loadedFrom ?? null);
+}
+
 export function minutesThisWeek(sessions: SessionRecord[], today: string): number {
   const week = new Set(weekDates(today));
   return sessions.filter((s) => week.has(s.date)).reduce((sum, s) => sum + (s.minutes || 0), 0);
@@ -91,8 +125,15 @@ export function masteredCount(catalog: Skill[], progressMap: ProgressMap): numbe
   return catalog.filter((s) => progressMap[s.id]?.status === "mastered").length;
 }
 
-export function reviewDueCount(catalog: Skill[], progressMap: ProgressMap, now: Date): number {
-  return catalog.filter((s) => isReviewDue(progressMap[s.id], now)).length;
+/**
+ * Mastered skills with a review due today. Pass the learner's `settings` to
+ * step over paused days (isReviewDueOn, the planner's rule); without them the
+ * plain family-date test (isReviewDue).
+ */
+export function reviewDueCount(catalog: Skill[], progressMap: ProgressMap, now: Date, settings?: PauseSettings | null, today?: string): number {
+  if (!settings) return catalog.filter((s) => isReviewDue(progressMap[s.id], now)).length;
+  const date = today ?? todayInFamilyTz(now);
+  return catalog.filter((s) => isReviewDueOn(progressMap[s.id], date, settings)).length;
 }
 
 /** Skills mastered this family week (masteredAt read as a family-timezone date, not UTC). */
@@ -627,20 +668,330 @@ export function quickReply(kids: QuickReplyKid[]): string {
     .join(" ");
 }
 
-/** "cole@henderson.family" → "cole"; parents (and anyone else) → null. Shared by server pages and the nav. */
+/**
+ * "cole@henderson.family" → "cole"; parents (and anyone else) → null. The local
+ * part must be exactly "cole" or "lily" (case-insensitive), so "colette@…" is
+ * not a kid. Shared by server pages and the nav.
+ */
 export function kidSlugForEmail(email: string | null | undefined): "cole" | "lily" | null {
   const e = (email ?? "").trim().toLowerCase();
-  if (isParentEmail(e)) return null;
-  if (e.startsWith("cole")) return "cole";
-  if (e.startsWith("lily")) return "lily";
+  if (!e.includes("@") || isParentEmail(e)) return null;
+  const local = e.slice(0, e.indexOf("@"));
+  if (local === "cole") return "cole";
+  if (local === "lily") return "lily";
   return null;
 }
 
-/** Mirrors learn_is_parent() in SQL: peter@… / nicole@… or the two family Gmail addresses. */
+/** The parent logins, exactly as learn_is_parent() lists them in SQL (migration 009), lower-case. */
+export const PARENT_EMAILS: readonly string[] = ["peter@henderson.family", "nicole@henderson.family", "pete.henderson@gmail.com", "nicole.stein78@gmail.com"];
+
+/** Mirrors learn_is_parent() in SQL: exactly the four PARENT_EMAILS, case-insensitive (no prefix wildcard). */
 export function isParentEmail(email: string | null | undefined): boolean {
-  const e = (email ?? "").trim().toLowerCase();
-  const local = e.split("@")[0];
-  return (e.includes("@") && (local === "peter" || local === "nicole")) || e === "pete.henderson@gmail.com" || e === "nicole.stein78@gmail.com";
+  return PARENT_EMAILS.includes((email ?? "").trim().toLowerCase());
+}
+
+// ---------------------------------------------------------------------------
+// Sunday review (design §3 stop / adjust table: 5 minutes on the parent view)
+// ---------------------------------------------------------------------------
+
+/** One learn_attempts row as the Sunday review reads it (report.ts AttemptSummary satisfies it). */
+export interface AttemptLike {
+  skillId: string;
+  mode: string;
+  correct: boolean;
+  /** 'independent' | 'hint' | 'taught' */
+  helpLevel?: string | null;
+  hintUsed?: boolean | null;
+  /** answer time */
+  ms?: number | null;
+  /** question.type (choice / tap / tiles taps can be guesses) */
+  questionType?: string | null;
+  createdAt: string;
+}
+
+/** Thermostat band (design §3.8): under 70% "low", 70-95% "hold", over 95% "high". */
+export type ThermostatBand = "low" | "hold" | "high";
+
+/** Sunday review thresholds (design §3 stop / adjust table, Appendix A thermostat). */
+export const SUNDAY_REVIEW = {
+  days: 7,
+  accuracyLow: 0.7,
+  accuracyHigh: 0.95,
+  hintRateFlag: 0.4,
+  quickWrongFlag: 0.2,
+  retentionFlag: 0.6,
+  /** under this many stars two weeks running → floor */
+  ringFloor: 4,
+  /** blocks ending after stopBy: this many in the week → action */
+  lateBlocksWeek: 2,
+  /** … or this many in 30 days */
+  lateBlocksMonth: 3,
+  /** no math skill mastered with accuracy over this → test out ahead */
+  testAheadAccuracy: 0.85,
+} as const;
+
+export interface SubjectAccuracy {
+  /** math, reading (reading, phonics, writing) or brain (reasoning) */
+  kind: BlockKind;
+  label: string;
+  /** independent first-try correct answers (hinted / taught answers are misses; quick wrong taps are not scored) */
+  correct: number;
+  /** scored learn + review items */
+  total: number;
+  /** correct / total; null without items */
+  accuracy: number | null;
+  band: ThermostatBand | null;
+  /** the same over the 7 days before (">95% two weeks") */
+  previousAccuracy: number | null;
+  /** the design §3.8 action for the band; null without items */
+  action: string | null;
+}
+
+export interface RateSignal {
+  /** count / of; null when `of` is 0 */
+  rate: number | null;
+  count: number;
+  of: number;
+  /** outside the design band */
+  flag: boolean;
+}
+
+export interface SundayReview {
+  /** first and last family date of the 7-day window (today − 6 … today) */
+  from: string;
+  to: string;
+  /** independent accuracy per subject with the thermostat band */
+  subjects: SubjectAccuracy[];
+  /** (hint + taught) / scored learn-mode items (the only items with hints); flag over 40% */
+  hintRate: RateSignal;
+  /** Lily only (null otherwise): wrong answers under 1.5 s / wrong answers with a time; flag over 20% */
+  quickWrongShare: RateSignal | null;
+  /**
+   * passed / completed 4-item review sets, from review-mode attempts grouped by
+   * skill and family day in 4s (pass = 3 of 4 independent); flag under 60%.
+   * Mix-up items are logged as reviews too, so a skill with 4 mix-up items counts as a set.
+   */
+  reviewRetention: RateSignal;
+  skillsMasteredThisWeek: Skill[];
+  mathSkillsMastered: number;
+  /** five-star ring: this family week (Mon-Sun) and the one before */
+  starsThisWeek: number;
+  starsLastWeek: number;
+  /** skills carrying the stuck flag (needs_help) */
+  stuckSkills: Skill[];
+  /** blocks (subject × day) whose last answer came after stopBy (or after midnight): last 7 days (should be 0) and last 30 */
+  blocksAfterStop: number;
+  blocksAfterStopMonth: number;
+  /** plain-English actions from the stop / adjust table; empty when every signal is in band */
+  actions: string[];
+}
+
+function pctText(r: number): string {
+  return `${Math.round(r * 100)}%`;
+}
+
+function isIndependentAttempt(a: AttemptLike): boolean {
+  return a.correct && a.hintUsed !== true && (!a.helpLevel || a.helpLevel === "independent");
+}
+
+function isGuessAttempt(a: AttemptLike): boolean {
+  return typeof a.ms === "number" && !!a.questionType && isGuess({ correct: a.correct, ms: a.ms, questionType: a.questionType as Question["type"] });
+}
+
+function rateSignal(count: number, of: number, flag: (r: number) => boolean): RateSignal {
+  const rate = of > 0 ? count / of : null;
+  return { rate, count, of, flag: rate !== null && flag(rate) };
+}
+
+/** Thermostat band for an accuracy (null without data). */
+export function thermostatBand(accuracy: number | null): ThermostatBand | null {
+  if (accuracy === null) return null;
+  if (accuracy < SUNDAY_REVIEW.accuracyLow) return "low";
+  return accuracy > SUNDAY_REVIEW.accuracyHigh ? "high" : "hold";
+}
+
+/**
+ * The Sunday review panel for one child: the measurable rows of the design's
+ * stop / adjust table over the last 7 family days, each with its flag, and the
+ * plain-English actions they trigger. Pass every attempt of at least the last
+ * 30 days (paged past 1000 rows), the progress rows, the sessions of the last
+ * two weeks, the child's catalog, today's family date, the learner settings
+ * (stopBy, pauses) and the slug ("lily" adds the quick-wrong-tap row).
+ */
+export function sundayReview(input: {
+  attempts: AttemptLike[];
+  progress: ProgressMap | SkillProgress[];
+  sessions: SessionRecord[];
+  catalog: Skill[];
+  today: string;
+  settings: Pick<LearnerSettings, "stopBy"> & PauseSettings;
+  slug: string;
+}): SundayReview {
+  const { attempts, sessions, catalog, today, settings } = input;
+  const progress: ProgressMap = Array.isArray(input.progress) ? Object.fromEntries(input.progress.map((p) => [p.skillId, p])) : input.progress;
+  const from = addDaysToDateStr(today, -(SUNDAY_REVIEW.days - 1));
+  const prevFrom = addDaysToDateStr(from, -SUNDAY_REVIEW.days);
+  const monthFrom = addDaysToDateStr(today, -29);
+  const kindOf = new Map<string, BlockKind>();
+  for (const s of catalog) {
+    const kind = BLOCK_ORDER.find((k) => BLOCK_SUBJECTS[k].includes(s.subject));
+    if (kind) kindOf.set(s.id, kind);
+  }
+  type Dated = { a: AttemptLike; day: string; kind: BlockKind };
+  const dated: Dated[] = [];
+  for (const a of attempts) {
+    const day = familyDateOfIso(a.createdAt);
+    const kind = kindOf.get(a.skillId);
+    if (day && kind && day <= today) dated.push({ a, day, kind });
+  }
+  const week = dated.filter((x) => x.day >= from);
+  const prevWeek = dated.filter((x) => x.day >= prevFrom && x.day < from);
+  const practice = (list: Dated[]) => list.filter((x) => (x.a.mode === "learn" || x.a.mode === "review") && !isGuessAttempt(x.a));
+  const actions: string[] = [];
+
+  // Thermostat: independent accuracy per subject.
+  const accuracyOf = (list: Dated[], kind: BlockKind) => {
+    const items = practice(list).filter((x) => x.kind === kind);
+    const correct = items.filter((x) => isIndependentAttempt(x.a)).length;
+    return { correct, total: items.length, accuracy: items.length > 0 ? correct / items.length : null };
+  };
+  const subjects: SubjectAccuracy[] = BLOCK_ORDER.map((kind) => {
+    const cur = accuracyOf(week, kind);
+    const before = accuracyOf(prevWeek, kind);
+    const band = thermostatBand(cur.accuracy);
+    const label = BLOCK_LABEL[kind];
+    let action: string | null = null;
+    if (band === "low" && cur.accuracy !== null) {
+      action = `${label}: ${pctText(cur.accuracy)} independent (under 70%). The adult gives a different worked example, steps back one prerequisite step, and flags it.`;
+      actions.push(action);
+    } else if (band === "high" && cur.accuracy !== null) {
+      if (thermostatBand(before.accuracy) === "high") {
+        action = `${label}: over 95% two weeks running (${pctText(cur.accuracy)}). Pretest the next two skills with a skip check.`;
+        actions.push(action);
+      } else {
+        action = `${label}: ${pctText(cur.accuracy)} (over 95%). If it holds next week, pretest the next two skills.`;
+      }
+    } else if (band === "hold" && cur.accuracy !== null) {
+      action = `${label}: ${pctText(cur.accuracy)}, in the 70-95% band. Hold the plan.`;
+    }
+    return { kind, label, ...cur, band, previousAccuracy: before.accuracy, action };
+  });
+
+  // Hint rate: learn-mode items answered after a hint or with a parent's help.
+  const learnItems = practice(week).filter((x) => x.a.mode === "learn");
+  const helped = learnItems.filter((x) => x.a.hintUsed === true || x.a.helpLevel === "hint" || x.a.helpLevel === "taught").length;
+  const hintRate = rateSignal(helped, learnItems.length, (r) => r > SUNDAY_REVIEW.hintRateFlag);
+
+  // Lily's quick wrong taps (all modes, the filtered taps included: they are exactly the quick wrongs).
+  let quickWrongShare: RateSignal | null = null;
+  if (input.slug.trim().toLowerCase() === "lily") {
+    const wrong = week.filter((x) => !x.a.correct && typeof x.a.ms === "number");
+    quickWrongShare = rateSignal(wrong.filter((x) => (x.a.ms as number) < GUESS_MS).length, wrong.length, (r) => r > SUNDAY_REVIEW.quickWrongFlag);
+  }
+
+  // Review retention: 4-item sets per skill and day.
+  const bySet = new Map<string, Dated[]>();
+  for (const x of week) {
+    if (x.a.mode !== "review" || isGuessAttempt(x.a)) continue;
+    const key = `${x.a.skillId}|${x.day}`;
+    const list = bySet.get(key);
+    if (list) list.push(x);
+    else bySet.set(key, [x]);
+  }
+  let setsDone = 0;
+  let setsPassed = 0;
+  for (const list of bySet.values()) {
+    list.sort((p, q) => p.a.createdAt.localeCompare(q.a.createdAt));
+    for (let i = 0; i + REVIEW_SET_SIZE <= list.length; i += REVIEW_SET_SIZE) {
+      setsDone += 1;
+      if (list.slice(i, i + REVIEW_SET_SIZE).filter((x) => isIndependentAttempt(x.a)).length >= REVIEW_SET_PASS) setsPassed += 1;
+    }
+  }
+  const reviewRetention = rateSignal(setsPassed, setsDone, (r) => r < SUNDAY_REVIEW.retentionFlag);
+
+  // Mastery, ring, stuck flags.
+  const skillsMasteredThisWeek = catalog.filter((s) => {
+    const p = progress[s.id];
+    const day = p?.status === "mastered" ? familyDateOfIso(p.masteredAt) : "";
+    return !!day && day >= from && day <= today;
+  });
+  const mathSkillsMastered = skillsMasteredThisWeek.filter((s) => s.subject === "math").length;
+  const starsThisWeek = weeklyRing(sessions, today).stars;
+  const lastWeekDay = addDaysToDateStr(today, -7);
+  const starsLastWeek = weeklyRing(sessions, lastWeekDay).stars;
+  const stuckSkills = catalog.filter((s) => progress[s.id]?.needsHelp === true);
+
+  // Blocks ending after stopBy (or after midnight): the last answer of each subject × day.
+  const stop = parseClock(settings.stopBy) ?? parseClock("20:30") ?? 1230;
+  const lastAnswer = new Map<string, string>();
+  for (const x of dated) {
+    if (x.day < monthFrom) continue;
+    const key = `${x.day}|${x.kind}`;
+    const prevAt = lastAnswer.get(key);
+    if (!prevAt || x.a.createdAt > prevAt) lastAnswer.set(key, x.a.createdAt);
+  }
+  let blocksAfterStop = 0;
+  let blocksAfterStopMonth = 0;
+  for (const [key, at] of lastAnswer) {
+    const t = new Date(at);
+    if (Number.isNaN(t.getTime())) continue;
+    const clock = minutesSinceMidnightInFamilyTz(t);
+    if (clock <= stop && clock >= 5 * 60) continue;
+    blocksAfterStopMonth += 1;
+    if (key.slice(0, 10) >= from) blocksAfterStop += 1;
+  }
+
+  // The remaining stop / adjust rows, in the table's order.
+  const windowDays = Array.from({ length: SUNDAY_REVIEW.days }, (_, i) => addDaysToDateStr(from, i));
+  const pausedIn = (days: string[]) => days.some((d) => !isWeekend(d) && isPaused(settings, d, today));
+  if (starsThisWeek < SUNDAY_REVIEW.ringFloor && starsLastWeek < SUNDAY_REVIEW.ringFloor && !pausedIn(weekDates(today)) && !pausedIn(weekDates(lastWeekDay))) {
+    actions.unshift(`Under 4 stars two weeks running (${starsLastWeek}, then ${starsThisWeek}). Drop to a floor of 3 nights, or 10-10-5 blocks, for a fortnight. Never add.`);
+  }
+  const math = subjects.find((s) => s.kind === "math");
+  const quietWeek = windowDays.some((d) => isPaused(settings, d, today) || lightWeekMode(settings, d) === "review-only");
+  if (mathSkillsMastered === 0 && !quietWeek && math && math.accuracy !== null) {
+    if (math.accuracy > SUNDAY_REVIEW.testAheadAccuracy) {
+      actions.push(`No math skill mastered this week at ${pctText(math.accuracy)} accuracy. If last week was also 0, test out ahead (skip check on the next skill).`);
+    } else if (math.accuracy < SUNDAY_REVIEW.accuracyLow) {
+      actions.push(`No math skill mastered this week and accuracy is ${pctText(math.accuracy)}. If last week was also 0, step back to the prerequisite.`);
+    }
+  }
+  if (reviewRetention.flag && reviewRetention.rate !== null) {
+    actions.push(`Review retention ${pctText(reviewRetention.rate)} (${setsPassed} of ${setsDone} sets passed, under 60%). One new skill every second night until it recovers.`);
+  }
+  if (hintRate.flag && hintRate.rate !== null) {
+    actions.push(`Hint rate ${pctText(hintRate.rate)} (over 40%). The adult re-models for three nights.`);
+  }
+  if (stuckSkills.length > 0) {
+    actions.push(`Stuck flag on ${stuckSkills.map((s) => s.title).join(", ")}. Open the next session with a different worked example.`);
+  }
+  const stopLabel = formatClockLabel(settings.stopBy);
+  if (blocksAfterStop >= SUNDAY_REVIEW.lateBlocksWeek) {
+    actions.push(`${blocksAfterStop} blocks ended after ${stopLabel} this week. Start at 7:15 or skip the night.`);
+  }
+  if (blocksAfterStopMonth >= SUNDAY_REVIEW.lateBlocksMonth) {
+    actions.push(`${blocksAfterStopMonth} blocks ended after ${stopLabel} in the last 30 days. Renegotiate the evening window.`);
+  }
+  if (quickWrongShare?.flag && quickWrongShare.rate !== null) {
+    actions.push(`Quick wrong taps are ${pctText(quickWrongShare.rate)} of wrong answers (over 20%). The adult reads the items aloud for a week.`);
+  }
+
+  return {
+    from,
+    to: today,
+    subjects,
+    hintRate,
+    quickWrongShare,
+    reviewRetention,
+    skillsMasteredThisWeek,
+    mathSkillsMastered,
+    starsThisWeek,
+    starsLastWeek,
+    stuckSkills,
+    blocksAfterStop,
+    blocksAfterStopMonth,
+    actions,
+  };
 }
 
 /** Settings type re-export for callers that only need the pause fields. */

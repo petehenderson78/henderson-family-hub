@@ -26,7 +26,14 @@
  *   Friday Free), XP (1 / 0.5 / effort 3, replay decay), ladder levels, seeds, rows.
  *   Stats: five-star ring, Friday Free / bonus set, rotation, input points
  *   (daily caps, weekly cap 25, wallet), launch line, struggle flags, routing.
- *   Report: independent accuracy (hinted = miss, guesses excluded), family dates.
+ *   Report: independent accuracy (hinted = miss, guesses excluded), family dates,
+ *   mastery mode (test-out / practiced / parent-verified).
+ *   Fix round A2: review dates by family calendar date (DST), pause-aware due
+ *   dates (isReviewDueOn), mix-up grading helper and one generator per mission
+ *   (mix-up, review sets), a same-generator review never knocks out the new
+ *   skill, skip-check re-check clears the note, streakInfo completeness,
+ *   weekend "done" star and streak freeze rules, weekday brain rotation, the
+ *   Sunday review panel, and the stuck rule's call-site polarity.
  * Exits 1 with a readable report on any failure.
  */
 
@@ -110,7 +117,7 @@ const {
 const { mulberry32, hashString, questionSeed, questionCounterKey } = rngMod;
 const { CATALOG, catalogFor } = catalogMod;
 const { gradeAnswer } = gradeMod;
-const { isWeekend, isFriday, parseClock, minutesSinceMidnightInFamilyTz, isLastFridayOfMonth, familyMidnightIso, weekStartDate, previousSchoolDay, familyDateOfIso } = datesMod;
+const { isWeekend, isFriday, parseClock, minutesSinceMidnightInFamilyTz, isLastFridayOfMonth, familyMidnightIso, familyNoonIso, weekStartDate, previousSchoolDay, familyDateOfIso } = datesMod;
 const { attemptToRow, newClientId, sessionToRow, sessionFromRow, progressFromRow, progressToRow } = rowsMod;
 
 /**
@@ -493,7 +500,7 @@ for (const id of generatorIds) {
   p = applyResult(p, true, now);
   assert(p.status === "mastered", "mastery: 10 correct", `expected mastered, got ${p.status}`);
   assert(p.intervalDays === 1, "mastery: interval", `expected 1, got ${p.intervalDays}`);
-  assert(p.nextReviewAt === new Date(now.getTime() + day).toISOString(), "mastery: nextReviewAt", "expected tomorrow");
+  assert(familyDateOfIso(p.nextReviewAt) === "2026-10-13" && p.nextReviewAt === familyNoonIso("2026-10-13"), "mastery: nextReviewAt", `expected tomorrow (family noon), got ${p.nextReviewAt}`);
   assert(!!p.masteredAt && p.testOut === false, "mastery: masteredAt", "missing / testOut wrong");
 
   // hinted / taught corrects do not count toward mastery
@@ -624,7 +631,7 @@ for (const id of generatorIds) {
   const vac = { ...defaultSettings(1), vacations: [{ from: "2026-12-20", to: "2026-12-31" }] };
   assert(isPaused(vac, "2026-12-25") && !isPaused(vac, "2026-12-19"), "isPaused vacations", "range check");
   assert(normalizeSettings({ vacations: [{ from: "2026-12-20", to: "2026-12-31" }, { from: "bad" }, { from: "2026-12-31", to: "2026-12-20" }] }, 1).vacations?.length === 1, "normalizeSettings vacations", "keeps only valid ranges");
-  assert(shiftReviewDates([due], 3)[0].nextReviewAt === new Date(now.getTime() - day + 3 * day).toISOString(), "shiftReviewDates", "review date must move by the paused days");
+  assert(familyDateOfIso(shiftReviewDates([due], 3)[0].nextReviewAt) === "2026-10-14", "shiftReviewDates", "review date must move by 3 family days (deprecated helper, date arithmetic)");
 
   // streak freeze
   const mkSession = (date: string, status: SessionRecord["status"], completed = status === "done"): SessionRecord => ({
@@ -1127,7 +1134,17 @@ for (const id of generatorIds) {
     const reply = quickReply([{ name: "Cole", blocks: [{ ...blocks[0], done: true }, blocks[1], { ...blocks[2], done: true }, blocks[3]] }]);
     assert(reply === "Cole reading done, math partly done, thinking not done.", "quick reply groups review sets into their kind", reply);
     assert(kidSlugForEmail("cole@henderson.family") === "cole" && kidSlugForEmail("Lily@henderson.family") === "lily" && kidSlugForEmail("nicole@henderson.family") === null && kidSlugForEmail("peter@henderson.family") === null && kidSlugForEmail("pete.henderson@gmail.com") === null && kidSlugForEmail("nicole.stein78@gmail.com") === null, "kid routing by email", "cole / lily / parents");
-    assert(isParentEmail("peter@henderson.family") && isParentEmail("NICOLE@x.org") && isParentEmail("pete.henderson@gmail.com") && isParentEmail("nicole.stein78@gmail.com") && !isParentEmail("cole@henderson.family") && !isParentEmail("peterpan@x.org"), "isParentEmail mirrors learn_is_parent()", "parents only");
+    assert(
+      isParentEmail("peter@henderson.family") && isParentEmail(" NICOLE@Henderson.Family ") && isParentEmail("pete.henderson@gmail.com") && isParentEmail("Nicole.Stein78@gmail.com") &&
+        !isParentEmail("nicole@x.org") && !isParentEmail("peter@gmail.com") && !isParentEmail("cole@henderson.family") && !isParentEmail("peterpan@henderson.family") && !isParentEmail(null),
+      "isParentEmail mirrors learn_is_parent() (exactly the four addresses, case-insensitive)",
+      "parents only"
+    );
+    assert(
+      kidSlugForEmail("COLE@henderson.family") === "cole" && kidSlugForEmail("lily@x.org") === "lily" && kidSlugForEmail("colette@x.org") === null && kidSlugForEmail("lilyann@henderson.family") === null && kidSlugForEmail("cole") === null && kidSlugForEmail(undefined) === null,
+      "kidSlugForEmail: the local part must be exactly cole / lily",
+      String(kidSlugForEmail("colette@x.org"))
+    );
     const names = ponyNameChoices("m1.count.next", ["Clover"]);
     assert(names.length === 6 && new Set(names).size === 6 && !names.includes("Clover") && JSON.stringify(names) === JSON.stringify(ponyNameChoices("m1.count.next", ["Clover"])), "ponyNameChoices", names.join(","));
     const stable = ponyNames([
@@ -1139,6 +1156,378 @@ for (const id of generatorIds) {
     assert(weekStartDate("2026-10-18") === "2026-10-12" && previousSchoolDay("2026-10-12") === "2026-10-09" && familyDateOfIso("2026-10-14T03:30:00Z") === "2026-10-13", "date helpers", "week start / previous school day / family date");
     const big = attemptToRow({ learnerId: "l", skillId: "s", mode: "learn", question: { type: "numeric", prompt: "1", answer: 1, explain: "e", hint: "h" }, answer: "1", correct: true, ms: 1, seed: 0xffffffff });
     assert(big.seed === 4294967295, "attemptToRow keeps an unsigned 32-bit seed", String(big.seed));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fix round A2: engine logic
+// ---------------------------------------------------------------------------
+
+{
+  const {
+    reviewAtIso,
+    isReviewDueOn,
+    effectiveReviewDate,
+    pausedDaysBetween,
+    reviewScheduledOn,
+    isMixupBlock,
+    streakInfo,
+    brainRotationFor,
+    BRAIN_ROTATION,
+    chooseSkillForBlock,
+    needsSkipCheckFollowUp,
+    MIXUP_MIN_SKILLS,
+  } = masteryMod;
+  const { reviewDueCount, weeklyRing, sessionCounts, todayStatus, sundayReview, thermostatBand, computeStreakInfo } = statsMod;
+  const { buildSkillRows, masteryModeFor } = reportMod;
+  const { addDaysToDateStr, daysBetweenDateStr, weekdayIndexMon } = datesMod;
+
+  const mk = (id: string, subject: Skill["subject"], generator: string, extra: Partial<Skill> = {}): Skill => ({
+    id,
+    subject,
+    grade: 1,
+    title: `T ${id}`,
+    kidTitle: id.toUpperCase(),
+    standards: ["X.1"],
+    prereqs: [],
+    generator,
+    estMinutes: 5,
+    testOut: false,
+    parentTip: "tip",
+    track: "both",
+    ...extra,
+  });
+  /** A mastered row whose review was scheduled on family date `scheduled` for `interval` days. */
+  const sched = (id: string, scheduled: string, interval: number, extra: Partial<SkillProgress> = {}): SkillProgress => ({
+    ...emptyProgress(id),
+    status: "mastered",
+    attempts: 10,
+    correct: 10,
+    streak: 5,
+    window: Array(10).fill(true),
+    intervalDays: interval,
+    nextReviewAt: familyNoonIso(addDaysToDateStr(scheduled, interval)),
+    lastPracticedAt: `${scheduled}T23:30:00.000Z`,
+    masteredAt: "2026-10-01T23:00:00.000Z",
+    ...extra,
+  });
+  const cole = defaultSettings(3);
+  const noLight = { ...defaultSettings(3), lightWeeks: [] };
+
+  // --- DST: review dates are family calendar dates (FR-16) ---
+  {
+    const marked = markMasteredByParent(emptyProgress("d1"), new Date("2027-03-14T04:30:00Z"), 7); // Sat Mar 13 23:30 EST, before spring-forward
+    assert(familyDateOfIso(marked.nextReviewAt) === "2027-03-20", "DST: Mark mastered at 23:30 before spring-forward → +7 family days", String(marked.nextReviewAt));
+    let fb = emptyProgress("d2");
+    for (let i = 0; i < 10; i++) fb = applyResult(fb, true, new Date("2026-11-01T04:10:00Z")); // Sun Nov 1 00:10 EDT, the fall-back night
+    assert(fb.status === "mastered" && familyDateOfIso(fb.nextReviewAt) === "2026-11-02", "DST: mastered 00:10 on the fall-back night → due the next family day", String(fb.nextReviewAt));
+    assert(!isReviewDue(fb, new Date("2026-11-02T03:00:00Z")) && isReviewDue(fb, new Date("2026-11-02T23:00:00Z")), "DST: not due the same evening (Nov 1 22:00 EST), due Nov 2", "family dates");
+    const rs = applyReviewSet(sched("d3", "2027-03-10", 3), [true, true, true, true], new Date("2027-03-14T04:30:00Z"));
+    assert(rs.intervalDays === 7 && familyDateOfIso(rs.nextReviewAt) === "2027-03-20", "DST: review set at 23:30 before spring-forward", String(rs.nextReviewAt));
+    const halved = applyReviewSet(sched("d5", "2027-03-01", 14), [true, false, false, false], new Date("2027-03-14T04:30:00Z"));
+    assert(halved.intervalDays === 7 && familyDateOfIso(halved.nextReviewAt) === "2027-03-20", "DST: failed set halves by family days", String(halved.nextReviewAt));
+    assert(
+      reviewAtIso(new Date("2026-10-12T20:00:00Z"), 1) === "2026-10-13T16:00:00.000Z" && familyNoonIso("2026-12-07") === "2026-12-07T17:00:00.000Z" && familyNoonIso("2026-11-01") === "2026-11-01T17:00:00.000Z" && familyNoonIso("2027-03-14") === "2027-03-14T16:00:00.000Z",
+      "reviewAtIso / familyNoonIso (EDT, EST, both DST days)",
+      reviewAtIso(new Date("2026-10-12T20:00:00Z"), 1)
+    );
+    assert(daysBetweenDateStr("2027-03-13", "2027-03-20") === 7 && daysBetweenDateStr("2026-11-02", "2026-10-31") === -2, "daysBetweenDateStr", "across DST");
+    assert(familyDateOfIso(shiftReviewDates([sched("d4", "2027-03-10", 3)], 2)[0].nextReviewAt) === "2027-03-15", "shiftReviewDates is date-based across DST", "Mar 13 + 2");
+  }
+
+  // --- paused days stop the review clock (replaces the parent-view date shift; FR-11 / FR-27) ---
+  {
+    // Scheduled Fri Dec 18 for 7 days (due Dec 25); the default Dec 21 - Jan 1 "off" week lies between:
+    // Dec 19-20 count, the break does not, then Jan 2..6 → effectively due Wed Jan 6.
+    const br = sched("pa", "2026-12-18", 7);
+    assert(effectiveReviewDate(br, "2027-01-04", cole) === "2027-01-06", "pause: effective date steps over the off week", String(effectiveReviewDate(br, "2027-01-04", cole)));
+    assert(!isReviewDueOn(br, "2027-01-04", cole) && isReviewDueOn(br, "2027-01-06", cole) && isReviewDue(br, new Date("2027-01-04T23:00:00Z")), "pause: due Jan 6, not Jan 4 (plain isReviewDue says due since Dec 25)", "isReviewDueOn");
+    assert(!isReviewDueOn(br, "2026-12-26", cole), "pause: not due during the break", "Dec 26");
+    assert(isReviewDueOn(br, "2027-01-04", null) && effectiveReviewDate(br, "2027-01-04") === "2026-12-25", "pause: without settings = the plain family date", "compat");
+    // A planned future vacation never moves today's reviews (the old save-time shift moved Oct 13 to Oct 18).
+    const future = { ...noLight, vacations: [{ from: "2027-04-05", to: "2027-04-09" }] };
+    const tomorrow = sched("pb", "2026-10-12", 1);
+    assert(isReviewDueOn(tomorrow, "2026-10-13", future) && effectiveReviewDate(tomorrow, "2026-10-13", future) === "2026-10-13", "pause: a future vacation leaves Oct 13 alone", String(effectiveReviewDate(tomorrow, "2026-10-13", future)));
+    // Days covered twice (a vacation inside the off week, plus Pause until) count once.
+    const overlap = { ...cole, vacations: [{ from: "2026-12-20", to: "2026-12-24" }], pausedUntil: "2026-12-23", pausedFrom: "2026-12-22" };
+    assert(pausedDaysBetween(overlap, "2026-12-18", "2027-01-04", "2027-01-04") === 13, "pause: overlapping pauses count each day once", String(pausedDaysBetween(overlap, "2026-12-18", "2027-01-04", "2027-01-04")));
+    assert(effectiveReviewDate(br, "2027-01-04", overlap) === "2027-01-07", "pause: the overlap shifts by 13 days, not 17", String(effectiveReviewDate(br, "2027-01-04", overlap)));
+    // A pause cleared early counts only its elapsed days; an ongoing pause only the days so far.
+    const set = applyPauseEdit(noLight, { ...noLight, pausedUntil: "2026-10-30" }, "2026-10-12");
+    const cleared = applyPauseEdit(set, { ...set, pausedUntil: null }, "2026-10-14");
+    const wk = sched("pc", "2026-10-09", 7); // due Fri Oct 16
+    assert(effectiveReviewDate(wk, "2026-10-16", cleared) === "2026-10-18" && !isReviewDueOn(wk, "2026-10-16", cleared) && isReviewDueOn(wk, "2026-10-19", cleared), "pause: a cleared pause shifts by its 2 elapsed days only", String(effectiveReviewDate(wk, "2026-10-16", cleared)));
+    assert(effectiveReviewDate(wk, "2026-10-13", set) === "2026-10-18", "pause: an ongoing pause counts the days so far", String(effectiveReviewDate(wk, "2026-10-13", set)));
+    assert(reviewScheduledOn(br) === "2026-12-18" && reviewScheduledOn({ nextReviewAt: familyNoonIso("2026-10-20"), intervalDays: 0, lastPracticedAt: "2026-10-14T23:00:00Z" }) === "2026-10-14", "reviewScheduledOn: due − interval, else lastPracticedAt", "dates");
+    // The planner, the due counter and chooseSkillForBlock use it.
+    const cat = [mk("pm1", "math", "g-pm1"), mk("pm2", "math", "g-pm2"), mk("pr", "reading", "g-pr"), mk("pz", "reasoning", "g-pz")];
+    const prog = mergeProgress(cat, [sched("pm1", "2026-12-18", 7)]);
+    const jan4 = planMission(cat, prog, cole, new Date("2027-01-04T23:00:00Z"), "2027-01-04");
+    const jan6 = planMission(cat, prog, cole, new Date("2027-01-06T23:00:00Z"), "2027-01-06");
+    assert(!jan4.blocks.some((b) => b.skillId === "pm1") && jan6.blocks.some((b) => b.skillId === "pm1" && b.mode === "review"), "pause: planMission plans the review on its effective date", JSON.stringify(jan4.blocks.map((b) => [b.skillId, b.mode])));
+    const n4 = new Date("2027-01-04T23:00:00Z");
+    assert(reviewDueCount(cat, prog, n4) === 1 && reviewDueCount(cat, prog, n4, cole) === 0 && reviewDueCount(cat, prog, new Date("2027-01-06T23:00:00Z"), cole) === 1, "reviewDueCount: pause-aware with settings", "1 / 0 / 1");
+    assert(chooseSkillForBlock(cat.slice(0, 2), prog, n4, false, cole, "2027-01-04")?.mode === "learn" && chooseSkillForBlock(cat.slice(0, 2), prog, n4)?.mode === "review", "chooseSkillForBlock: pause-aware with settings", "learn / review");
+  }
+
+  // --- Friday mix-up: grading helper, one skill per generator, never a 1-skill mix-up (FR-09 / FR-17) ---
+  {
+    assert(isMixupBlock({ skillIds: ["a"] }) && isMixupBlock({ skillIds: ["a", "b"] }) && !isMixupBlock({}) && !isMixupBlock({ skillIds: undefined }) && !isMixupBlock(null), "isMixupBlock: skillIds present, whatever the count", "helper");
+    const cat = [mk("fm", "math", "g-fm"), mk("fr", "reading", "g-fr"), mk("fr2", "reading", "g-fr2"), mk("fz1", "reasoning", "g-fz1"), mk("fz2", "reasoning", "g-fz2")];
+    const fri = "2026-10-16";
+    const one = planMission(cat, mergeProgress(cat, [sched("fz1", "2026-10-14", 14)]), cole, new Date(`${fri}T22:00:00Z`), fri);
+    const brainOne = one.blocks.filter((b) => b.kind === "brain");
+    assert(brainOne.length > 0 && brainOne.every((b) => !isMixupBlock(b)) && brainOne.some((b) => b.skillId === "fz2" && b.mode === "learn"), "one mastered skill is no mix-up: an ordinary brain block", JSON.stringify(brainOne));
+    const two = planMission(cat, mergeProgress(cat, [sched("fz1", "2026-10-14", 14), sched("fr", "2026-10-14", 14)]), cole, new Date(`${fri}T22:00:00Z`), fri);
+    const mixTwo = two.blocks.find((b) => isMixupBlock(b));
+    assert(!!mixTwo && mixTwo.skillIds?.length === 2 && MIXUP_MIN_SKILLS === 2, "two mastered skills on free generators make a mix-up", JSON.stringify(two.blocks.map((b) => [b.skillId, b.skillIds])));
+    const dup = [mk("x1", "math", "g-same"), mk("x2", "math", "g-same"), mk("x3", "reading", "g-other")];
+    const mixed = mixupSkills(dup, mergeProgress(dup, [sched("x1", "2026-10-10", 7), sched("x2", "2026-10-11", 7), sched("x3", "2026-10-12", 7)]), 8);
+    assert(mixed.length === 2 && new Set(mixed.map((s) => s.generator)).size === 2, "mixupSkills: one skill per generator", mixed.map((s) => s.id).join(","));
+    const weakProg = mergeProgress(dup, [
+      sched("x1", "2026-10-10", 7, { window: [true, false, false, true, true, true, true, true, true, true] }),
+      sched("x2", "2026-10-11", 7, { window: [true, false, true, true, true, true, true, true, true, true] }),
+      sched("x3", "2026-10-12", 7),
+    ]);
+    const weak = mixupSkills(dup, weakProg, 12, 2);
+    assert(weak.length === 2 && weak[0].id === "x1" && weak[1].id === "x3", "last Friday: the two weakest lead, one per generator", weak.map((s) => s.id).join(","));
+    // Review sets: two due skills on one generator → one set tonight (most overdue), the other stays due.
+    const rcat = [mk("ra", "math", "g-r"), mk("rb", "math", "g-r"), mk("rc", "math", "g-rc"), mk("rr", "reading", "g-rr"), mk("rz", "reasoning", "g-rz")];
+    const rprog = mergeProgress(rcat, [sched("ra", "2026-10-10", 3), sched("rb", "2026-10-11", 1)]);
+    const rm = planMission(rcat, rprog, cole, new Date("2026-10-13T23:00:00Z"), "2026-10-13").blocks.filter((b) => b.kind === "math");
+    assert(rm.filter((b) => b.mode === "review").length === 1 && rm[0].skillId === "rb" && rm.some((b) => b.skillId === "rc" && b.mode === "learn") && isReviewDueOn(rprog.ra, "2026-10-13", cole), "review sets: one per generator, the other waits a night", JSON.stringify(rm.map((b) => [b.skillId, b.mode])));
+    // Whole missions on the real catalogs, many due reviews: no generator twice across blocks, sets and the mix-up.
+    for (const slug of ["cole", "lily"]) {
+      const real = catalogFor(slug);
+      const settings = defaultSettings(slug === "lily" ? 1 : 3);
+      const rows: SkillProgress[] = [];
+      for (const subject of ["math", "reading", "phonics", "writing", "reasoning"] as const) {
+        const list = real.filter((s) => s.subject === subject);
+        list.slice(0, Math.ceil(list.length * 0.4)).forEach((s, i) => rows.push(sched(s.id, addDaysToDateStr("2026-10-12", -(i % 5)), 1 + (i % 3))));
+      }
+      const prog = mergeProgress(real, rows);
+      for (const date of ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-30"]) {
+        const plan = planMission(real, prog, settings, new Date(`${date}T22:00:00Z`), date);
+        const gens = plan.blocks.flatMap((b) => (b.skillIds ?? [b.skillId]).map((id) => real.find((s) => s.id === id)?.generator ?? "?"));
+        assert(new Set(gens).size === gens.length, `no generator twice in a mission (${slug} ${date})`, gens.join(","));
+        assert(plan.blocks.every((b) => !isMixupBlock(b) || (b.skillIds?.length ?? 0) >= MIXUP_MIN_SKILLS), `a mix-up has >= 2 skills (${slug} ${date})`, JSON.stringify(plan.blocks.map((b) => b.skillIds)));
+      }
+    }
+  }
+
+  // --- a due review on the new skill's generator never knocks the new skill out (FR-10) ---
+  {
+    const cat = [mk("a1", "math", "gA"), mk("a2", "math", "gA", { prereqs: ["a1"] }), mk("b1", "math", "gB"), mk("c1", "math", "gC"), mk("rd", "reading", "gR"), mk("zz", "reasoning", "gZ")];
+    const tue = new Date("2026-10-13T23:00:00Z");
+    const p1 = mergeProgress(cat, [sched("a1", "2026-10-12", 1), sched("b1", "2026-10-12", 14), sched("c1", "2026-10-12", 14)]);
+    const m1 = planMission(cat, p1, cole, tue, "2026-10-13").blocks.filter((b) => b.kind === "math");
+    assert(m1.length === 1 && m1[0].skillId === "a2" && m1[0].mode === "learn" && m1[0].minutes === 12, "same-generator due set waits; the new skill keeps the slot", JSON.stringify(m1.map((b) => [b.skillId, b.mode, b.minutes])));
+    assert(!m1.some((b) => b.mode === "review" && !isReviewDueOn(p1[b.skillId], "2026-10-13", cole)), "no not-due bonus review in the new-skill slot", JSON.stringify(m1));
+    const p2 = mergeProgress(cat, [sched("a1", "2026-10-12", 1), sched("b1", "2026-10-12", 1), sched("c1", "2026-10-12", 14)]);
+    const m2 = planMission(cat, p2, cole, tue, "2026-10-13").blocks.filter((b) => b.kind === "math");
+    assert(m2.length === 2 && m2[0].skillId === "b1" && m2[0].mode === "review" && m2[1].skillId === "a2" && m2[1].mode === "learn", "another due set takes the conflicting one's place", JSON.stringify(m2.map((b) => [b.skillId, b.mode])));
+    const p3 = mergeProgress(cat, [sched("a1", "2026-10-12", 1), sched("b1", "2026-10-12", 1), sched("c1", "2026-10-12", 1)]);
+    const m3 = planMission(cat, p3, cole, tue, "2026-10-13").blocks.filter((b) => b.kind === "math");
+    assert(m3.length === 3 && m3.every((b) => b.mode === "review"), "three due sets (one per generator) still replace the new skill", JSON.stringify(m3.map((b) => [b.skillId, b.mode])));
+    const sat = planMission(cat, p2, cole, new Date("2026-10-17T14:00:00Z"), "2026-10-17").blocks.filter((b) => b.kind === "math");
+    assert(sat.length === 2 && sat[0].skillId === "b1" && sat[1].skillId === "a2" && sat[1].mode === "learn", "weekend: same rule under the cap of 4", JSON.stringify(sat.map((b) => [b.skillId, b.mode])));
+  }
+
+  // --- a low re-check ends the quick fill / hole fill (FR-13) ---
+  {
+    const t = (n: number) => Array.from({ length: 10 }, (_, i) => i < n);
+    const sat = new Date("2026-10-17T15:00:00Z");
+    const quick = applySkipCheck(emptyProgress("qf"), t(8), sat, "math");
+    const low = applySkipCheck(quick, t(4), new Date("2026-10-24T15:00:00Z"), "math");
+    assert(quick.helpNote === "quick fill" && low.status === "learning" && low.helpNote === null && !needsSkipCheckFollowUp(low), "re-check 4/10 → full learn, quick-fill note cleared", JSON.stringify([low.status, low.helpNote]));
+    const hole = applySkipCheck(applySkipCheck(emptyProgress("hf"), t(7), sat, "reading"), t(3), sat, "reading");
+    assert(hole.helpNote === null, "re-check 3/10 → hole-fill note cleared", String(hole.helpNote));
+    assert(applySkipCheck(quick, t(7), sat, "math").helpNote === "quick fill", "re-check 7/10 → still a quick fill", "kept");
+    assert(applySkipCheck(markNeedsHelp(emptyProgress("sn"), "What is 7 × 8?"), t(4), sat, "math").helpNote === "What is 7 × 8?", "a stuck note survives a low skip check", "kept");
+    const cat = [mk("qf", "math", "g-qf", { testOut: true }), mk("qr", "reading", "g-qr"), mk("qz", "reasoning", "g-qz")];
+    const nextSat = planMission(cat, mergeProgress(cat, [low]), cole, new Date("2026-10-31T14:00:00Z"), "2026-10-31");
+    assert(nextSat.blocks.some((b) => b.skillId === "qf" && b.mode === "learn" && !b.offerTestOut), "no skip check offered after the low re-check", JSON.stringify(nextSat.blocks.map((b) => [b.skillId, b.offerTestOut])));
+  }
+
+  // --- evidence pack: test-out / practiced / parent-verified (FR-14 / FR-35) ---
+  {
+    const skill = mk("ev", "math", "g-ev");
+    const row = (mode: string, correct: boolean, at: string) => ({ skillId: "ev", mode, correct, createdAt: at, helpLevel: "independent", hintUsed: false, ms: 4000, questionType: "numeric" });
+    const mon = "2026-10-12T23:00:00Z";
+    const markAt = new Date("2026-10-14T23:00:00Z");
+    const learning: SkillProgress = { ...emptyProgress("ev"), status: "learning" };
+    const modeOf = (p: SkillProgress, rows: ReturnType<typeof row>[]) => buildSkillRows([skill], { ev: p }, rows)[0].mode;
+    const failedProbe = [true, true, true, false, false].map((c) => row("test", c, mon));
+    assert(modeOf(markMasteredByParent(learning, markAt), failedProbe) === "parent-verified", "report: failed probe + Mark mastered = parent-verified (FR-14)", modeOf(markMasteredByParent(learning, markAt), failedProbe));
+    const six = Array.from({ length: 6 }, () => row("learn", true, mon));
+    assert(modeOf(markMasteredByParent(learning, markAt), six) === "parent-verified", "report: 6 learn items + Mark mastered = parent-verified (FR-35)", modeOf(markMasteredByParent(learning, markAt), six));
+    const probe = applyTestOut(learning, [true, true, true, true, true], markAt);
+    const twelve = Array.from({ length: 12 }, (_, i) => row("learn", i % 2 === 0, mon));
+    const fiveTest = [1, 2, 3, 4, 5].map(() => row("test", true, "2026-10-14T22:59:00Z"));
+    assert(probe.testOut === true && modeOf(probe, [...twelve, ...fiveTest]) === "test-out", "report: practice, then a passed probe = test-out (FR-35)", modeOf(probe, [...twelve, ...fiveTest]));
+    let practiced = emptyProgress("ev");
+    const tenRows = Array.from({ length: 10 }, (_, i) => row("learn", true, `2026-10-13T23:0${i}:00Z`));
+    for (const r of tenRows) practiced = applyResult(practiced, true, new Date(r.createdAt));
+    assert(practiced.status === "mastered" && modeOf(practiced, tenRows) === "practiced", "report: practiced to mastery", modeOf(practiced, tenRows));
+    // A skip check at 8/10 pre-fills the window; 9 learn items then master it (engine and report agree).
+    let filled = applySkipCheck(emptyProgress("ev"), Array.from({ length: 10 }, (_, i) => i < 8), new Date("2026-10-17T15:00:00Z"), "math");
+    const fillRows = [...Array.from({ length: 10 }, (_, i) => row("test", i < 8, `2026-10-17T15:0${i}:00Z`)), ...Array.from({ length: 9 }, (_, i) => row("learn", true, `2026-10-19T23:0${i}:00Z`))];
+    for (const r of fillRows.slice(10)) filled = applyResult(filled, true, new Date(r.createdAt));
+    assert(filled.status === "mastered" && !filled.testOut && modeOf(filled, fillRows) === "practiced", "report: skip check 8/10 + practice = practiced", JSON.stringify([filled.status, modeOf(filled, fillRows)]));
+    const legacy = { ...applyTestOut(learning, [true, true, true, true, true], markAt), testOut: false };
+    assert(modeOf(legacy, [...six, ...fiveTest]) === "test-out", "report: legacy row without the flag, mastered by a 5/5 probe = test-out", modeOf(legacy, [...six, ...fiveTest]));
+    assert(masteryModeFor(markMasteredByParent(learning, markAt), []) === "parent-verified" && masteryModeFor(probe, []) === "test-out" && masteryModeFor(undefined, []) === "—", "report: no attempt rows → progress flags", "fallback");
+    const [withMix] = buildSkillRows([skill], { ev: practiced }, [...tenRows, row("mixup", false, "2026-10-16T23:00:00Z")]);
+    assert(withMix.independentTotal === 10 && withMix.reviewTotal === 0, "report: rows of another mode stay out of the independent and review figures", JSON.stringify([withMix.independentTotal, withMix.reviewTotal]));
+  }
+
+  // --- the streak over a long history: streakInfo says when the loaded window cut it short (FR-15) ---
+  {
+    const done = (date: string): SessionRecord => ({ learnerId: "l", date, minutes: 10, xp: 0, blocks: [], completed: true, status: "done" });
+    const all: SessionRecord[] = [];
+    for (let d = "2026-10-12"; d <= "2026-12-12"; d = addDaysToDateStr(d, 1)) if (weekdayIndexMon(d) !== 6) all.push(done(d));
+    const today = "2026-12-13";
+    const from = addDaysToDateStr(today, -60);
+    const win = all.filter((s) => s.date >= from);
+    const full = streakInfo(all, today, cole);
+    const cut = streakInfo(win, today, cole, from);
+    assert(full.complete && full.streak === all.length && full.streak === streakFromSessions(all, today, cole), "streakInfo: the whole history is complete", JSON.stringify(full));
+    assert(!cut.complete && cut.streak === win.length && cut.streak < full.streak, "streakInfo: an unbroken 60-day window is incomplete (a lower bound)", JSON.stringify(cut));
+    const gap = win.filter((s) => s.date !== "2026-12-01");
+    const broken = streakInfo(gap, today, cole, from);
+    assert(broken.complete && broken.streak === gap.filter((s) => s.date > "2026-12-01").length, "streakInfo: a break inside the window is complete", JSON.stringify(broken));
+    const empty = streakInfo([], today, cole, from);
+    assert(empty.complete && empty.streak === 0 && computeStreakInfo(win, today, cole, from).complete === false && streakInfo(win, today, cole).complete, "streakInfo: empty window, stats wrapper, no window given", JSON.stringify(empty));
+  }
+
+  // --- weekend "done" earns the star; skipped nights freeze; an empty school night breaks (G1 / G2) ---
+  {
+    const s = (date: string, status: SessionRecord["status"], blocks: SessionBlock[] = []): SessionRecord => ({ learnerId: "l", date, minutes: 0, xp: 0, blocks, completed: false, status });
+    const open: SessionBlock = { kind: "reading", subject: "reading", skillId: "x", mode: "learn", minutes: 30, label: "x", done: false };
+    const sat = s("2026-10-17", "done", [open, { ...open, kind: "brain", subject: "reasoning" }]);
+    assert(sessionCounts(sat) && weeklyRing([sat], "2026-10-18").sets === 1 && weeklyRing([sat], "2026-10-18").stars === 1 && todayStatus(sat).status === "done", "weekend set marked done earns the star whatever its blocks", JSON.stringify(weeklyRing([sat], "2026-10-18")));
+    assert(!sessionCounts(s("2026-10-17", "skipped")) && weeklyRing([s("2026-10-18", "skipped")], "2026-10-18").stars === 0, "a skipped day earns no star", "skipped");
+    const d = (date: string): SessionRecord => ({ ...s(date, "done"), completed: true });
+    assert(streakFromSessions([d("2026-10-12"), s("2026-10-13", "skipped"), d("2026-10-14")], "2026-10-14", cole) === 2, "a skipped school night freezes the streak", "2");
+    assert(streakFromSessions([d("2026-10-12"), s("2026-10-13", "planned"), d("2026-10-14")], "2026-10-14", cole) === 1 && streakFromSessions([d("2026-10-12"), d("2026-10-14")], "2026-10-14", cole) === 1, "a school night neither done, skipped nor paused breaks the streak", "planned / no row");
+    assert(streakFromSessions([d("2026-10-12"), d("2026-10-14")], "2026-10-14", { ...cole, vacations: [{ from: "2026-10-13", to: "2026-10-13" }] }) === 2, "a paused school night freezes the streak", "vacation");
+    assert(streakFromSessions([d("2026-10-16"), sat, d("2026-10-19")], "2026-10-19", cole) === 3, "a weekend set marked done counts toward the streak", "3");
+  }
+
+  // --- weekday brain rotation (G3, parent-guide order: Mon verbal, Tue paper folding, Wed number, Thu figures + logic) ---
+  {
+    const fam = [
+      mk("zn", "reasoning", "r.numberSeries"),
+      mk("zv", "reasoning", "r.verbalAnalogies"),
+      mk("zp", "reasoning", "r.paperFolding"),
+      mk("zf", "reasoning", "r.figureMatrix"),
+      mk("zl", "reasoning", "r.logicGrid", { prereqs: ["zf"] }),
+      mk("zm", "math", "g-zm"),
+      mk("zr", "reading", "g-zr"),
+    ];
+    const brainOn = (date: string, rows: SkillProgress[] = [], cat: Skill[] = fam) =>
+      planMission(cat, mergeProgress(cat, rows), cole, new Date(`${date}T22:00:00Z`), date).blocks.find((b) => b.kind === "brain")?.skillId;
+    const week = ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"].map((d) => brainOn(d));
+    assert(week.join(",") === "zv,zp,zn,zf", "brain rotation Mon verbal / Tue paper folding / Wed number / Thu figural", week.join(","));
+    assert(brainOn("2026-10-17") === "zn" && brainOn("2026-10-18") === "zn", "weekends: any reasoning skill", String(brainOn("2026-10-17")));
+    const learningV: SkillProgress = { ...emptyProgress("zv"), status: "learning", attempts: 3, window: [true, true, true], streak: 3 };
+    assert(brainOn("2026-10-13", [learningV]) === "zp", "rotation: the family day wins over a learning skill of another family", String(brainOn("2026-10-13", [learningV])));
+    const noFold = fam.filter((s) => s.id !== "zp");
+    assert(brainOn("2026-10-13", [learningV], noFold) === "zv", "rotation: no paper-folding skill → any eligible reasoning skill (learning first)", String(brainOn("2026-10-13", [learningV], noFold)));
+    assert(brainOn("2026-10-15", [sched("zf", "2026-10-10", 30)]) === "zl", "rotation: Thursday includes logic grids", String(brainOn("2026-10-15", [sched("zf", "2026-10-10", 30)])));
+    assert(
+      brainRotationFor("2026-10-15")?.generators.includes("r.sudoku4") === true && brainRotationFor("2026-10-16") === null && brainRotationFor("2026-10-17") === null && BRAIN_ROTATION[1].generators.join(",") === "r.paperFolding,r.mentalRotation",
+      "BRAIN_ROTATION table",
+      "Thu figures + logic; Fri and weekends none"
+    );
+    const real = catalogFor("cole");
+    const monReal = planMission(real, mergeProgress(real, []), cole, new Date("2026-10-12T22:00:00Z"), "2026-10-12").blocks.find((b) => b.kind === "brain");
+    assert(!!monReal && BRAIN_ROTATION[0].generators.includes(real.find((s) => s.id === monReal.skillId)?.generator ?? ""), "rotation on Cole's catalog: Monday is verbal", String(monReal?.skillId));
+  }
+
+  // --- the stuck rule as the player calls it (SM-01) ---
+  {
+    const res = (...firstTryCorrect: boolean[]) => firstTryCorrect.map((c) => ({ firstTryCorrect: c, firstMiss: !c }));
+    assert(isStuck(res(false, false, false).map((r) => r.firstTryCorrect)), "stuck: 3 first-try misses fire (isStuck(results.map(r => r.firstTryCorrect)))", "true");
+    assert(!isStuck(res(true, true, true).map((r) => r.firstTryCorrect)), "stuck: 3 correct answers never fire", "false");
+    assert(isStuck(res(true, true, false, false, false).map((r) => r.firstTryCorrect)) && !isStuck(res(false, false, true).map((r) => r.firstTryCorrect)) && !isStuck(res(false, true, false, false).map((r) => r.firstTryCorrect)), "stuck: only the last 3 count", "window");
+    assert(isStuck(res(true, true, true).map((r) => r.firstMiss)), "stuck: (guard) passing miss flags inverts the rule — the player must pass firstTryCorrect", "documents SM-01");
+  }
+
+  // --- Sunday review panel (G4) ---
+  {
+    const cat = [mk("sm1", "math", "g1"), mk("sm2", "math", "g2"), mk("sr1", "reading", "g3"), mk("sz1", "reasoning", "g4")];
+    const today = "2026-10-25"; // Sunday (EDT)
+    type Opt = { hhmm?: string; help?: string; hint?: boolean; ms?: number; type?: string };
+    const A = (skillId: string, mode: string, correct: boolean, date: string, o: Opt = {}) => ({
+      skillId,
+      mode,
+      correct,
+      createdAt: new Date(`${date}T${o.hhmm ?? "19:20"}:00-04:00`).toISOString(),
+      helpLevel: o.help ?? "independent",
+      hintUsed: o.hint ?? false,
+      ms: o.ms ?? 4000,
+      questionType: o.type ?? "numeric",
+    });
+    const times = (n: number, f: (i: number) => ReturnType<typeof A>) => Array.from({ length: n }, (_, i) => f(i));
+    assert(thermostatBand(0.69) === "low" && thermostatBand(0.7) === "hold" && thermostatBand(0.95) === "hold" && thermostatBand(0.951) === "high" && thermostatBand(null) === null, "thermostatBand edges", "70 / 95");
+
+    // Flags scenario (Cole).
+    const attempts = [
+      ...times(5, () => A("sm1", "learn", true, "2026-10-19")),
+      ...times(3, () => A("sm1", "learn", true, "2026-10-19", { help: "hint", hint: true })),
+      A("sm1", "learn", false, "2026-10-20", { hhmm: "20:44" }),
+      A("sm1", "learn", false, "2026-10-20", { hhmm: "20:45" }),
+      ...times(20, () => A("sr1", "learn", true, "2026-10-21")),
+      ...times(20, () => A("sr1", "learn", true, "2026-10-14")),
+      ...times(10, (i) => A("sz1", "learn", i < 8, "2026-10-22", { hhmm: i === 9 ? "20:40" : "19:20" })),
+      ...[true, false, true, false].map((c) => A("sm2", "review", c, "2026-10-20", { hhmm: "19:25" })),
+      ...[true, true, true, true].map((c) => A("sr1", "review", c, "2026-10-21", { hhmm: "19:25" })),
+      ...[true, true, true].map((c) => A("sz1", "review", c, "2026-10-22", { hhmm: "19:25" })),
+      A("sm2", "learn", true, "2026-10-05", { hhmm: "21:00" }),
+    ];
+    const progress = [
+      { ...sched("sm1", "2026-10-21", 1), masteredAt: new Date("2026-10-21T19:30:00-04:00").toISOString() },
+      { ...emptyProgress("sz1"), status: "learning" as const, needsHelp: true, helpNote: "Which comes next?" },
+    ];
+    const r = sundayReview({ attempts, progress, sessions: [], catalog: cat, today, settings: cole, slug: "cole" });
+    const subj = (k: string) => r.subjects.find((x) => x.kind === k)!;
+    assert(r.from === "2026-10-19" && r.to === today, "sunday: window is the last 7 family days", `${r.from}..${r.to}`);
+    assert(subj("math").band === "low" && subj("math").total === 14 && subj("math").correct === 7 && /different worked example/.test(subj("math").action ?? ""), "sunday: math low band (hinted = miss, reviews included)", JSON.stringify(subj("math")));
+    assert(subj("reading").band === "high" && subj("reading").previousAccuracy === 1 && /Pretest the next two skills/.test(subj("reading").action ?? ""), "sunday: reading over 95% two weeks → pretest", JSON.stringify(subj("reading")));
+    assert(subj("brain").band === "hold" && subj("brain").correct === 11 && subj("brain").total === 13, "sunday: brain hold", JSON.stringify(subj("brain")));
+    assert(r.hintRate.count === 3 && r.hintRate.of === 40 && !r.hintRate.flag, "sunday: hint rate over learn items", JSON.stringify(r.hintRate));
+    assert(r.reviewRetention.count === 1 && r.reviewRetention.of === 2 && r.reviewRetention.flag, "sunday: retention 1 of 2 sets (a 3-item set is not counted)", JSON.stringify(r.reviewRetention));
+    assert(r.skillsMasteredThisWeek.map((s) => s.id).join(",") === "sm1" && r.mathSkillsMastered === 1, "sunday: skills mastered this week", JSON.stringify(r.skillsMasteredThisWeek.map((s) => s.id)));
+    assert(r.starsThisWeek === 0 && r.starsLastWeek === 0 && r.stuckSkills.map((s) => s.id).join(",") === "sz1", "sunday: stars and stuck flags", JSON.stringify([r.starsThisWeek, r.starsLastWeek]));
+    assert(r.blocksAfterStop === 2 && r.blocksAfterStopMonth === 3 && r.quickWrongShare === null, "sunday: blocks after 8:30 (week / 30 days); quick taps Lily only", JSON.stringify([r.blocksAfterStop, r.blocksAfterStopMonth]));
+    const expectActions = [/^Under 4 stars two weeks running/, /^Math: 50% independent/, /^Reading: over 95% two weeks running/, /^Review retention 50%/, /^Stuck flag on T sz1/, /^2 blocks ended after 8:30 pm this week/, /^3 blocks ended after 8:30 pm in the last 30 days/];
+    assert(r.actions.length === expectActions.length && expectActions.every((re, i) => re.test(r.actions[i])), "sunday: actions follow the stop / adjust table", JSON.stringify(r.actions));
+
+    // Lily: hint rate and quick wrong taps.
+    const lilyAttempts = [
+      ...times(4, () => A("sm1", "learn", true, "2026-10-20")),
+      ...times(8, () => A("sm1", "learn", true, "2026-10-20", { help: "hint", hint: true })),
+      ...times(3, () => A("sm1", "learn", false, "2026-10-20", { ms: 3000, type: "choice" })),
+      ...times(2, () => A("sm1", "learn", false, "2026-10-20", { ms: 800, type: "choice" })),
+    ];
+    const lily = sundayReview({ attempts: lilyAttempts, progress: {}, sessions: [], catalog: cat, today, settings: defaultSettings(1), slug: "lily" });
+    assert(lily.hintRate.count === 8 && lily.hintRate.of === 15 && lily.hintRate.flag, "sunday: hint rate over 40% flags (quick taps not scored)", JSON.stringify(lily.hintRate));
+    assert(!!lily.quickWrongShare && lily.quickWrongShare.count === 2 && lily.quickWrongShare.of === 5 && lily.quickWrongShare.flag, "sunday: Lily's quick wrong taps over 20% flag", JSON.stringify(lily.quickWrongShare));
+    assert(lily.actions.some((a) => /^Hint rate 53%/.test(a)) && lily.actions.some((a) => /^Quick wrong taps are 40%/.test(a)), "sunday: hint and quick-tap actions", JSON.stringify(lily.actions));
+
+    // Everything in band → no actions.
+    const fiveStars = (monday: string): SessionRecord[] =>
+      [0, 1, 2, 3, 4].map((i) => ({ learnerId: "l", date: addDaysToDateStr(monday, i), minutes: 30, xp: 0, blocks: [], completed: true, status: "done" as const }));
+    const calm = [
+      ...times(10, (i) => A("sm2", "learn", i < 9, "2026-10-20")),
+      ...times(10, (i) => A("sm2", "learn", i < 9, "2026-10-13")),
+      ...times(10, (i) => A("sr1", "learn", i < 8, "2026-10-21")),
+      ...[true, true, true, false].map((c) => A("sm2", "review", c, "2026-10-22")),
+      A("sr1", "learn", false, "2026-10-23", { ms: 4000, type: "choice" }),
+    ];
+    const ok = sundayReview({ attempts: calm, progress: mergeProgress(cat, [{ ...sched("sm1", "2026-10-21", 1), masteredAt: new Date("2026-10-21T19:30:00-04:00").toISOString() }]), sessions: [...fiveStars("2026-10-12"), ...fiveStars("2026-10-19")], catalog: cat, today, settings: defaultSettings(1), slug: "lily" });
+    assert(ok.actions.length === 0 && ok.starsThisWeek === 5 && ok.starsLastWeek === 5 && ok.reviewRetention.rate === 1 && ok.quickWrongShare?.flag === false && ok.subjects.every((x) => x.band !== "low"), "sunday: every signal in band → no actions", JSON.stringify(ok.actions));
   }
 }
 

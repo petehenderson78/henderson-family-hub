@@ -1,8 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound, redirect } from "next/navigation";
-import { loadLearnerBundleServer, loadPonyNotesServer } from "@/lib/learn/server";
+import { kidSlugForLoginServer, learnLoadErrorPage, loadLearnerBundleServer, loadPonyNotesServer } from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
-import { kidSlugForEmail } from "@/lib/learn/stats";
 import { coachEnabled } from "@/lib/learn/coach";
 import PlayView from "./play-view";
 
@@ -36,14 +35,37 @@ export default async function PlayPage({ params, searchParams }: PlayPageProps) 
 
   const [{ slug }, query] = await Promise.all([params, searchParams]);
   if (!/^[a-z0-9-]{1,32}$/.test(slug)) notFound();
+  // Reload keeps the same block/skill/mode.
+  const qs = new URLSearchParams(Object.entries(query).filter((e): e is [string, string] => typeof e[1] === "string")).toString();
+  const here = `/learn/${slug}/play${qs ? `?${qs}` : ""}`;
+
   // A kid login only ever plays their own mission.
-  const kidSlug = kidSlugForEmail(user.email);
+  let kidSlug: string | null;
+  try {
+    kidSlug = await kidSlugForLoginServer(user.email);
+  } catch (e) {
+    return learnLoadErrorPage(e, here);
+  }
   if (kidSlug && kidSlug !== slug) redirect(`/learn/${kidSlug}`);
+
+  // The player writes progress and sessions built from what loads here, so it never starts
+  // from data that failed to load (that would overwrite the real rows): any error → retry card.
   const today = todayInFamilyTz();
-  const bundle = await loadLearnerBundleServer(slug, today);
-  if (!bundle) notFound();
-  // Lily's stable: names already taken are not offered again when a new pony arrives.
-  const ponyNotes = bundle.learner.settings.theme.screen === "tutu" ? await loadPonyNotesServer(bundle.learner.id) : [];
+  const load = async () => {
+    const bundle = await loadLearnerBundleServer(slug, today);
+    if (!bundle) return null;
+    // Lily's stable: names already taken are not offered again when a new pony arrives.
+    const ponyNotes = bundle.learner.settings.theme.screen === "tutu" ? await loadPonyNotesServer(bundle.learner.id) : [];
+    return { bundle, ponyNotes };
+  };
+  let loaded: Awaited<ReturnType<typeof load>>;
+  try {
+    loaded = await load();
+  } catch (e) {
+    return learnLoadErrorPage(e, here);
+  }
+  if (!loaded) notFound();
+  const { bundle, ponyNotes } = loaded;
 
   // Key forces a fresh run when the block/skill/mode changes (same component position).
   const key = `${query.block ?? ""}|${query.skill ?? ""}|${query.mode ?? ""}|${query.subject ?? ""}`;

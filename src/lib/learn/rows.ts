@@ -90,6 +90,37 @@ const SESSION_STATUSES: SessionStatus[] = ["planned", "partial", "done", "skippe
 const HELP_LEVELS: HelpLevel[] = ["independent", "hint", "taught"];
 const MODES = ["learn", "review", "test"] as const;
 
+/** The error shape supabase-js returns (PostgrestError carries more fields). */
+export interface DbError {
+  message: string;
+  code?: string | null;
+}
+
+/**
+ * Read every page of a query. PostgREST stops one response at the project's
+ * max_rows (1000 on Supabase), so any read that can pass 1000 rows (ledger,
+ * attempts, notes, sessions, progress) must page or it silently truncates.
+ * `build(from, to)` must apply a stable order (e.g. created_at, id) and the
+ * range. An error on ANY page is returned (never a silent partial result).
+ */
+export async function selectAllPages<T>(
+  build: (from: number, to: number) => PromiseLike<{ data: unknown; error: DbError | null }>,
+  opts: { max?: number; page?: number } = {}
+): Promise<{ data: T[]; error: DbError | null }> {
+  const max = opts.max ?? 50000;
+  const page = opts.page ?? 1000;
+  const out: T[] = [];
+  for (let from = 0; from < max; from += page) {
+    const to = Math.min(from + page, max) - 1;
+    const { data, error } = await build(from, to);
+    if (error) return { data: out, error };
+    const rows = Array.isArray(data) ? (data as T[]) : [];
+    out.push(...rows);
+    if (rows.length < to - from + 1) break;
+  }
+  return { data: out, error: null };
+}
+
 /**
  * Client-generated UUID v4 for insert-only rows (attempts, rewards): the DB
  * ignores a second write with the same id, so retries never double-count.
