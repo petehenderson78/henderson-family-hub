@@ -34,7 +34,8 @@ export interface ProgressRow {
   attempts: number;
   correct: number;
   streak: number;
-  window: unknown;
+  /** DB column `recent_results` ("window" is a reserved word in PostgreSQL). */
+  recent_results: unknown;
   interval_days: number;
   next_review_at: string | null;
   last_practiced_at: string | null;
@@ -123,7 +124,7 @@ export function learnerFromRow(row: LearnerRow): Learner {
 
 export function progressFromRow(row: ProgressRow): SkillProgress {
   const status = STATUSES.includes(row.status as SkillStatus) ? (row.status as SkillStatus) : "ready";
-  const window = Array.isArray(row.window) ? row.window.map((v) => v === true) : [];
+  const window = Array.isArray(row.recent_results) ? row.recent_results.map((v) => v === true) : [];
   return {
     skillId: row.skill_id,
     status,
@@ -150,7 +151,7 @@ export function progressToRow(learnerId: string, p: SkillProgress): ProgressRow 
     attempts: p.attempts,
     correct: p.correct,
     streak: p.streak,
-    window: p.window,
+    recent_results: p.window,
     interval_days: p.intervalDays,
     next_review_at: p.nextReviewAt,
     last_practiced_at: p.lastPracticedAt,

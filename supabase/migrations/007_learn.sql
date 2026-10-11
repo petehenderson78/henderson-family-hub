@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS learners (
 );
 
 -- ---------------------------------------------------------------------------
--- learn_skill_progress: mastery state per (learner, skill). `window` keeps the
+-- learn_skill_progress: mastery state per (learner, skill). `recent_results` keeps the
 -- last 10 window-eligible results as booleans (only INDEPENDENT correct answers
 -- enter as true); the engine (src/lib/learn/mastery.ts) owns the rules.
 -- Rows are created lazily the first time a skill is practiced.
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS learn_skill_progress (
   attempts int NOT NULL DEFAULT 0,
   correct int NOT NULL DEFAULT 0,
   streak int NOT NULL DEFAULT 0,
-  window jsonb NOT NULL DEFAULT '[]'::jsonb,
+  recent_results jsonb NOT NULL DEFAULT '[]'::jsonb, -- last 10 window-eligible results ("window" is reserved in PostgreSQL)
   interval_days int NOT NULL DEFAULT 0,
   next_review_at timestamptz,
   last_practiced_at timestamptz,
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS learn_attempts (
   answer text,
   correct boolean NOT NULL,
   ms int,
-  seed int,
+  seed bigint, -- unsigned 32-bit hash; exceeds int4
   hint_used boolean NOT NULL DEFAULT false,
   help_level text NOT NULL DEFAULT 'independent'
     CHECK (help_level IN ('independent', 'hint', 'taught')),
@@ -165,7 +165,7 @@ ALTER TABLE learn_skill_progress ADD COLUMN IF NOT EXISTS needs_help boolean NOT
 ALTER TABLE learn_skill_progress ADD COLUMN IF NOT EXISTS help_note text;
 ALTER TABLE learn_skill_progress ADD COLUMN IF NOT EXISTS test_out boolean NOT NULL DEFAULT false;
 
-ALTER TABLE learn_attempts ADD COLUMN IF NOT EXISTS seed int;
+ALTER TABLE learn_attempts ADD COLUMN IF NOT EXISTS seed bigint;
 ALTER TABLE learn_attempts ADD COLUMN IF NOT EXISTS hint_used boolean NOT NULL DEFAULT false;
 ALTER TABLE learn_attempts ADD COLUMN IF NOT EXISTS help_level text NOT NULL DEFAULT 'independent';
 ALTER TABLE learn_attempts ADD COLUMN IF NOT EXISTS recorded_by uuid DEFAULT auth.uid();
