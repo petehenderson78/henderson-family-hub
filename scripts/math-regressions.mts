@@ -4,7 +4,7 @@
  * Plain Node 22+ (built-in TypeScript type stripping) with the repo's resolve
  * hook (./ts-resolve-hooks.mjs) for extension-less relative imports.
  *
- * One probe per fixed content-review finding (ME-01..ME-17 in math-early.ts /
+ * One probe per fixed content-review finding (ME-01..ME-21 in math-early.ts /
  * math-util.ts, MU-07 and MU-08 in math-util.ts). Each probe builds 2,000
  * seeded questions for the affected skill(s) and checks the specific property
  * the finding broke, recomputing the answer independently from the prompt
@@ -629,6 +629,107 @@ probeDirect("MU-07", "fracAccept(n, d): mixed forms of the given and simplified 
   if (strict.some((s) => s.replace(/\s+/g, "") !== `${n}/${d}`)) return `fracAccept(${n}, ${d}, false) = ${strict.join(" | ")}`;
   return true;
 }, 2000);
+
+// ---------------------------------------------------------------------------
+// ME-18 — the regrouping addition skill always makes a new ten
+// ---------------------------------------------------------------------------
+
+probe("ME-18", "m1.nbt.add2d.regroup (regroup: true): the ones always make a new ten (no 45 + 20, 40 + 9 or 30 + 10)", ["m1.nbt.add2d.regroup"], (q) => {
+  const m = q.prompt.match(/^(\d+) \+ (\d+) = \?$/);
+  if (!m || q.type !== "numeric") return undefined;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (q.answer !== a + b) return `answer ${q.answer}, expected ${a + b}`;
+  if (a + b > 100) return `${a} + ${b} is over 100`;
+  if ((a % 10) + (b % 10) < 10) return `${a} + ${b}: ones ${a % 10} + ${b % 10} = ${(a % 10) + (b % 10)}, no new ten`;
+  if (!/new ten/.test(q.explain)) return `explanation never names the new ten: ${q.explain}`;
+  return true;
+}, 1500);
+
+// ---------------------------------------------------------------------------
+// ME-19 — the regrouping subtraction skill always needs a ten unbundled
+// ---------------------------------------------------------------------------
+
+probe("ME-19", "m2.nbt.sub100 (regroup: true): the bottom ones digit is always bigger (no 89 − 40 or 38 − 18)", ["m2.nbt.sub100"], (q) => {
+  const m = q.prompt.match(/^(\d+) − (\d+) = \?$/);
+  if (!m || q.type !== "numeric") return undefined;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (q.answer !== a - b) return `answer ${q.answer}, expected ${a - b}`;
+  if (b < 10 || b >= a) return `${a} − ${b} is not a two-digit take-away`;
+  if (a % 10 >= b % 10) return `${a} − ${b}: ${a % 10} ones can take away ${b % 10}, no regrouping`;
+  if (!/regroup 1 ten as 10 ones/.test(q.explain)) return `explanation does not regroup: ${q.explain}`;
+  return true;
+}, 1500);
+
+// ---------------------------------------------------------------------------
+// ME-20 — picture graphs: every row is drawn with its own category's picture
+// ---------------------------------------------------------------------------
+
+/** The picture each survey answer should show (a new category needs adding here). */
+const CATEGORY_PICTURE: Record<string, string> = {
+  brown: "🐴", white: "🐴", black: "🐴", spotted: "🐴",
+  soccer: "⚽", baseball: "⚾", basketball: "🏀", cheer: "📣",
+  apples: "🍎", bananas: "🍌", grapes: "🍇", berries: "🍓",
+  ballet: "🩰", tap: "👞", "hip hop": "🎧", jazz: "🎷",
+  dogs: "🐶", cats: "🐱", fish: "🐟", ponies: "🐴",
+};
+
+probe("ME-20", "picture graphs: each row repeats its own category's picture (no \"fish 🐱\"); the key names the picture", ["m1.dl.graph", "m2.dl.concepts", "m3.dl.scaled"], (q) => {
+  const grid = q.display?.grid;
+  if (!grid) return undefined;
+  const rows = grid.filter((r) => r[0] !== "Key");
+  for (const [label, pics] of rows) {
+    const want = CATEGORY_PICTURE[label];
+    if (!want) return `no expected picture for "${label}" (add it to CATEGORY_PICTURE)`;
+    if ([...pics].some((p) => p !== want)) return `"${label}" row shows ${pics}, expected ${want}s`;
+  }
+  const key = grid.find((r) => r[0] === "Key");
+  if (key) {
+    const km = key[1].match(/^(.+) = (\d+)$/);
+    if (!km) return `key "${key[1]}" is not "<picture> = <n>"`;
+    const shared = new Set(rows.map((r) => CATEGORY_PICTURE[r[0]]));
+    const want = shared.size === 1 ? [...shared][0] : "each picture";
+    if (km[1] !== want) return `key "${key[1]}" for rows ${rows.map((r) => r[0]).join(", ")} (expected "${want} = ${km[2]}")`;
+  }
+  return true;
+}, 1500);
+
+// ---------------------------------------------------------------------------
+// ME-21 — coin pictures: each coin's name fits inside the coin
+// ---------------------------------------------------------------------------
+
+/**
+ * Every <circle> + label pair in a coin picture: the bold label's box (0.62 em
+ * per letter — wider than textBoxes' 0.55 because the coin names are bold —
+ * from 0.72 em above the baseline to 0.22 em below for p/y tails) must sit
+ * inside the coin's stroke, and coins stay on the picture without touching.
+ */
+function coinLabelProblem(svg: string): string | null {
+  const coins = [...svg.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"[^>]*\/><text x="([\d.]+)" y="([\d.]+)" text-anchor="middle" font-size="([\d.]+)"[^>]*>([^<]+)<\/text>/g)];
+  const circles = (svg.match(/<circle /g) ?? []).length;
+  if (coins.length === 0 || coins.length !== circles) return `${circles} coins but ${coins.length} labelled coins`;
+  const placed: { cx: number; cy: number; r: number }[] = [];
+  for (const m of coins) {
+    const [cx, cy, r, x, y, size] = m.slice(1, 7).map(Number);
+    const label = m[7];
+    const half = ([...label].length * size * 0.62) / 2;
+    const corners = [[x - half, y - 0.72 * size], [x + half, y - 0.72 * size], [x - half, y + 0.22 * size], [x + half, y + 0.22 * size]];
+    const out = Math.max(...corners.map(([px, py]) => Math.hypot(px - cx, py - cy)));
+    if (out > r - 0.5) return `"${label}" (size ${size}) reaches ${out.toFixed(2)} from the centre of an r=${r} coin`;
+    if (cx - r < 0 || cx + r > 100 || cy - r < 0 || cy + r > 100) return `${label} coin at (${cx}, ${cy}) r=${r} runs off the picture`;
+    const hit = placed.find((c) => Math.hypot(c.cx - cx, c.cy - cy) < c.r + r + 1);
+    if (hit) return `${label} coin at (${cx}, ${cy}) touches the coin at (${hit.cx}, ${hit.cy})`;
+    placed.push({ cx, cy, r });
+  }
+  return null;
+}
+
+probe("ME-21", "coin pictures: every coin's name fits inside the coin (no \"penny\" spilling over the edge)", ["m1.m.coins", "m1.m.coins.count", "m2.m.money"], (q) => {
+  const svg = q.display?.svg;
+  if (!svg || !svg.includes("<circle")) return undefined;
+  return coinLabelProblem(svg) ?? true;
+}, 1500);
 
 // ---------------------------------------------------------------------------
 // report

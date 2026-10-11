@@ -1,5 +1,5 @@
 /**
- * Regression probes for the grade 3-5 math content review (findings MU-01..MU-20,
+ * Regression probes for the grade 3-5 math content review (findings MU-01..MU-21,
  * minus MU-07/MU-08 which live in math-util.ts):
  *   node scripts/math-upper-regressions.mts
  *
@@ -471,6 +471,22 @@ probe("MU-20 conversion stories measure the right kind of thing", [fromSkill("m5
   if (!fits[kind].includes(m[2]) || !fits[kind].includes(m[5])) return `${m[3]} measured in ${m[2]} / ${m[5]}`;
   return null;
 });
+
+// ---------------------------------------------------------------------------
+// MU-21 — fraction comparisons never show an empty fraction ("1/2 ○ 0/2")
+// ---------------------------------------------------------------------------
+
+probe("MU-21 compare items have no zero numerators and the marked sign is right", [fromSkill("m3.nf.compare"), fromSkill("m4.nf.compare"), fromGenerator("compareFractions", { mode: "sameNumOrDenom", denoms: [2, 3, 4, 6, 8] })], (q) => {
+  if (q.type !== "choice") return undefined;
+  const shown = [q.prompt, ...labels(q)].join(" ");
+  const zero = shown.match(/(?<![\d/])0\/\d+/);
+  if (zero) return `shows ${zero[0]}`;
+  const m = q.prompt.match(/^(\d+)\/(\d+) ○ (\d+)\/(\d+)/);
+  if (!m) return null;
+  const [n1, d1, n2, d2] = m.slice(1).map(Number);
+  const sign = n1 * d2 > n2 * d1 ? ">" : n1 * d2 < n2 * d1 ? "<" : "=";
+  return marked(q) === sign ? null : `marked ${marked(q)}, recomputed ${sign}`;
+}, 1500);
 
 // ---------------------------------------------------------------------------
 // report

@@ -314,7 +314,9 @@ const compareFractions: Generator = (ctx) => {
   let d2: number;
   const kind = mode === "sameNumOrDenom" ? pick(rng, ["den", "num"]) : mode === "mixed" ? pick(rng, ["den", "num", "unlike", "unlike"]) : "unlike";
   if (kind === "den") {
-    d1 = pick(rng, denoms);
+    // Two different numerators from 1 to d − 1 need d ≥ 3 (halves would force "1/2 ○ 0/2").
+    const roomy = denoms.filter((x) => x >= 3);
+    d1 = pick(rng, roomy.length > 0 ? roomy : [4]);
     d2 = d1;
     n1 = int(rng, 1, d1 - 1);
     n2 = int(rng, 1, d1 - 1);

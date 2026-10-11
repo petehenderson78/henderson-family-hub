@@ -1018,26 +1018,34 @@ const add2Digit: Generator = (ctx) => {
       hint: "Add up all the tens first, then all the ones, then put them together. Look for pairs of ones that make 10.",
     };
   }
-  const k = kind === "mixed" ? pick(rng, ["2d+1d", "2d+tens", "2d+2d"]) : kind;
+  // Adding whole tens never makes a new ten, so a regrouping "mixed" item is
+  // 2d+1d or 2d+2d (27 + 5, 36 + 27), never 2d+tens.
+  const k = kind === "mixed" ? pick(rng, regroup ? ["2d+1d", "2d+2d"] : ["2d+1d", "2d+tens", "2d+2d"]) : kind;
   let a: number;
   let b: number;
   if (k === "2d+1d") {
     a = int(rng, 11, 89);
     // No-regroup items need room in the ones: 69 + 1 would make a new ten.
     if (!regroup && a % 10 === 9) a -= 1;
+    // Regroup items need ones to build on: 40 + 9 cannot make a new ten.
+    if (regroup && a % 10 === 0) a += int(rng, 1, 9);
     const ao = a % 10;
-    b = regroup ? int(rng, Math.max(1, 10 - ao), 9) : int(rng, 1, Math.max(1, 9 - ao));
+    b = regroup ? int(rng, 10 - ao, 9) : int(rng, 1, Math.max(1, 9 - ao));
     if (!regroup && ao + b >= 10) b = 9 - ao || 1;
   } else if (k === "2d+tens") {
     a = int(rng, 11, 59);
     b = 10 * int(rng, 1, Math.floor((max - 1 - a) / 10));
   } else {
     a = int(rng, 11, 78);
+    // As above: with 0 ones, no second ones digit (1-9) can make a new ten.
+    if (regroup && a % 10 === 0) a += int(rng, 1, 9);
     const ao = a % 10;
-    const bo = regroup ? int(rng, Math.max(1, 10 - ao), 9) : int(rng, 0, Math.max(0, 9 - ao));
+    const bo = regroup ? int(rng, 10 - ao, 9) : int(rng, 0, Math.max(0, 9 - ao));
     const maxTens = Math.floor((max - 1 - a - bo) / 10);
     b = 10 * int(rng, 1, Math.max(1, maxTens)) + bo;
-    if (a + b > max) b = Math.max(10, max - a - 1);
+    // Over max: take away tens, never ones (the ones decide the regrouping).
+    while (a + b > max && b >= 20) b -= 10;
+    while (a + b > max && a >= 20) a -= 10;
   }
   const sum = a + b;
   return {
@@ -1068,12 +1076,17 @@ const sub2Digit: Generator = (ctx) => {
       hint: `Count the rods: ${a / 10} tens take away ${b / 10} tens.`,
     };
   }
-  const a = int(rng, 21, 99);
+  // Regrouping needs a bigger ones digit below, so the top ones digit is 0-8
+  // (int(rng, 10, 9) would hand back 9 or 10: "89 − 40").
+  const a = regroup ? 10 * int(rng, 2, 9) + int(rng, 0, 8) : int(rng, 21, 99);
   const ao = a % 10;
   const bo = regroup ? int(rng, ao + 1, 9) : int(rng, 0, ao);
-  const bt = int(rng, 1, Math.floor(a / 10) - (regroup ? 1 : 0) - (bo === 0 && !regroup ? 0 : 0));
+  const bt = int(rng, 1, Math.floor(a / 10) - (regroup ? 1 : 0));
   let b = Math.max(1, Math.min(a - 1, 10 * Math.max(0, bt) + bo));
-  if (a - b === b) b -= 1;
+  // Not a doubles fact (52 − 26 = 26). Keep the ones digit's relation to the
+  // top's: regroup items move a ten (78 − 39 → 78 − 49, not the no-regroup
+  // 78 − 38); no-regroup items with 0 ones move a ten too (60 − 30 → 60 − 20).
+  if (a - b === b) b = regroup ? b + 10 : bo > 0 ? b - 1 : b - 10;
   const d = a - b;
   const bTens = Math.floor(b / 10) * 10;
   const bOnes = b % 10;
@@ -1482,11 +1495,19 @@ interface Coin {
   fill: string;
 }
 
+/**
+ * Radii keep the real size order (dime < penny < nickel < quarter) and are big
+ * enough for the bold 4.2-unit name to sit inside the coin, descenders and
+ * all (about 0.62 em per letter: "penny" is 13 units wide in a 16-unit coin).
+ * Coins sit 24 units apart, so r ≤ 11 keeps neighbours from touching. The
+ * label is the coin's name, not its value: "How many cents is a nickel worth?"
+ * shows the coin, so a "5¢" label would give the answer away.
+ */
 const COINS: Coin[] = [
-  { name: "penny", plural: "pennies", value: 1, r: 7, fill: "#d97706" },
-  { name: "nickel", plural: "nickels", value: 5, r: 8.5, fill: "#9ca3af" },
-  { name: "dime", plural: "dimes", value: 10, r: 6, fill: "#cbd5e1" },
-  { name: "quarter", plural: "quarters", value: 25, r: 10, fill: "#94a3b8" },
+  { name: "penny", plural: "pennies", value: 1, r: 8, fill: "#d97706" },
+  { name: "nickel", plural: "nickels", value: 5, r: 9.5, fill: "#9ca3af" },
+  { name: "dime", plural: "dimes", value: 10, r: 7, fill: "#cbd5e1" },
+  { name: "quarter", plural: "quarters", value: 25, r: 11, fill: "#94a3b8" },
 ];
 
 /** COINS indexes from the biggest value down: count on from quarters, then dimes, nickels, pennies. */
@@ -1505,7 +1526,8 @@ function coinsSvg(counts: number[]): string {
     const x = 14 + (idx % perRow) * 24;
     const y = 14 + Math.floor(idx / perRow) * 24;
     out.push(`<circle cx="${x}" cy="${y}" r="${coin.r}" fill="${coin.fill}" stroke="#475569" stroke-width="1"/>`);
-    out.push(svgText(x, y + 1.8, coin.name, 4.2, 'fill="#1f2937" font-weight="700"'));
+    // Baseline 1.5 below the centre: the letters (x-height plus p/y tails) straddle the middle.
+    out.push(svgText(x, y + 1.5, coin.name, 4.2, 'fill="#1f2937" font-weight="700"'));
   });
   return svgWrap(out.join(""));
 }
@@ -2597,9 +2619,11 @@ const dataPictureGraph: Generator = (ctx) => {
   const cats = sample(rng, survey.cats, nCats);
   const values = cats.map(() => scale * int(rng, 1, Math.max(2, Math.floor(max / (scaled ? 2 : 1)))));
   const labels = cats.map((c) => c[0]);
-  const emoji = cats[0][1];
-  const grid: string[][] = cats.map((c, i) => [c[0], (survey.question === "favorite pony color" || survey.question === "favorite sport" ? c[1] : emoji).repeat(values[i] / scale)]);
-  if (scaled) grid.push(["Key", `${emoji} = ${scale}`]);
+  // Each row is drawn with its own category's picture (fish 🐟, not fish 🐱).
+  const grid: string[][] = cats.map((c, i) => [c[0], c[1].repeat(values[i] / scale)]);
+  // One shared picture (every pony row is 🐴) keys as "🐴 = 5"; mixed pictures as "each picture = 5".
+  const keyPic = cats.every((c) => c[1] === cats[0][1]) ? cats[0][1] : "each picture";
+  if (scaled) grid.push(["Key", `${keyPic} = ${scale}`]);
   const display = mode === "bar" ? { svg: barGraphSvg(labels, values, scale), speak: "Look at the bar graph." } : { grid, speak: "Look at the picture graph." };
   const title = `${pick(rng, KID_NAMES)} asked friends about their ${survey.question}.`;
   if (mode === "question" && rng() < 0.5) {
