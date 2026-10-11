@@ -39,6 +39,8 @@ export interface Skill {
   parentTip: string;
   /** which learner's tree includes it */
   track: Track;
+  /** 2-3 short teaching lines a parent can read aloud, ending with a worked example */
+  intro?: string[];
 }
 
 export interface Option {
@@ -126,10 +128,21 @@ export type ProgressMap = Record<string, SkillProgress>;
 
 export interface LearnerSettings {
   dailyMinutes: number;
+  /** Weekday block minutes (family norm 12 / 12 / 6). */
   blocks: { math: number; reading: number; brain: number };
+  /** Weekend block minutes (family norm 30 / 30 / 45). */
+  weekend: { math: number; reading: number; brain: number };
   targetGrade: { math: number; reading: number; reasoning: number };
   /** XP per family-currency unit */
   rewardRate: number;
+  /** Latest time a block may START, "HH:MM" 24h in the family timezone (family rule: 20:30). */
+  stopBy: string;
+  /** YYYY-MM-DD; while today <= pausedUntil, missions are paused and the streak is frozen. */
+  pausedUntil: string | null;
+  /** What the child sees: currency name and level theme. */
+  theme: { currency: string; levels: "baseball" | "ballet" | "generic" };
+  /** Speak prompts automatically (early readers). */
+  autoSpeak: boolean;
 }
 
 export interface Learner {
@@ -138,6 +151,8 @@ export interface Learner {
   name: string;
   grade: number;
   settings: LearnerSettings;
+  /** Login email for routing (kids land on their own dashboard). */
+  email?: string | null;
   createdAt: string;
 }
 
@@ -178,8 +193,13 @@ export interface SessionRecord {
   xp: number;
   blocks: SessionBlock[];
   completed: boolean;
+  /** planned → partial → done; skipped/vacation days carry no debt. */
+  status?: SessionStatus;
+  skipReason?: string | null;
   createdAt?: string;
 }
+
+export type SessionStatus = "planned" | "partial" | "done" | "skipped" | "vacation";
 
 export interface AttemptRecord {
   learnerId: string;

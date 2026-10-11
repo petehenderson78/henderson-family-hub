@@ -401,10 +401,17 @@ export function defaultSettings(grade: number): LearnerSettings {
   return {
     dailyMinutes: 30,
     blocks: { math: 12, reading: 12, brain: 6 },
+    weekend: { math: 30, reading: 30, brain: 45 },
     targetGrade: early
       ? { math: 2, reading: 2, reasoning: 1 }
-      : { math: 4, reading: 4, reasoning: 3 },
+      : { math: 5, reading: 4, reasoning: 3 },
     rewardRate: 100,
+    stopBy: "20:30",
+    pausedUntil: null,
+    theme: early
+      ? { currency: "Sparkle Points", levels: "ballet" }
+      : { currency: "Lightning Bucks", levels: "baseball" },
+    autoSpeak: early,
   };
 }
 
@@ -412,9 +419,18 @@ export function defaultSettings(grade: number): LearnerSettings {
 export function normalizeSettings(raw: unknown, grade: number): LearnerSettings {
   const d = defaultSettings(grade);
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const blocks = (r.blocks && typeof r.blocks === "object" ? r.blocks : {}) as Record<string, unknown>;
-  const tg = (r.targetGrade && typeof r.targetGrade === "object" ? r.targetGrade : {}) as Record<string, unknown>;
-  const num = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+  const obj = (v: unknown) => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
+  const blocks = obj(r.blocks);
+  const weekend = obj(r.weekend);
+  const tg = obj(r.targetGrade);
+  const theme = obj(r.theme);
+  const num = (v: unknown, fallback: number, min = 0, max = 240) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
+  const time = (v: unknown, fallback: string) =>
+    typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : fallback;
+  const dateOrNull = (v: unknown) =>
+    typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+  const levels = theme.levels;
   return {
     dailyMinutes: num(r.dailyMinutes, d.dailyMinutes),
     blocks: {
@@ -422,11 +438,23 @@ export function normalizeSettings(raw: unknown, grade: number): LearnerSettings 
       reading: num(blocks.reading, d.blocks.reading),
       brain: num(blocks.brain, d.blocks.brain),
     },
-    targetGrade: {
-      math: num(tg.math, d.targetGrade.math),
-      reading: num(tg.reading, d.targetGrade.reading),
-      reasoning: num(tg.reasoning, d.targetGrade.reasoning),
+    weekend: {
+      math: num(weekend.math, d.weekend.math),
+      reading: num(weekend.reading, d.weekend.reading),
+      brain: num(weekend.brain, d.weekend.brain),
     },
-    rewardRate: num(r.rewardRate, d.rewardRate),
+    targetGrade: {
+      math: num(tg.math, d.targetGrade.math, 1, 8),
+      reading: num(tg.reading, d.targetGrade.reading, 1, 8),
+      reasoning: num(tg.reasoning, d.targetGrade.reasoning, 1, 8),
+    },
+    rewardRate: num(r.rewardRate, d.rewardRate, 1, 100000),
+    stopBy: time(r.stopBy, d.stopBy),
+    pausedUntil: dateOrNull(r.pausedUntil),
+    theme: {
+      currency: typeof theme.currency === "string" && theme.currency.trim() ? theme.currency.trim().slice(0, 40) : d.theme.currency,
+      levels: levels === "baseball" || levels === "ballet" || levels === "generic" ? levels : d.theme.levels,
+    },
+    autoSpeak: typeof r.autoSpeak === "boolean" ? r.autoSpeak : d.autoSpeak,
   };
 }

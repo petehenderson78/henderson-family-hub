@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { loadLearnersServer, loadProgressServer, loadRecentSessionsServer, loadXpTotalServer } from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
+import { coachEnabled } from "@/lib/learn/coach";
 import ParentView, { type ParentKid } from "./parent-view";
 
 export const dynamic = "force-dynamic";
@@ -29,5 +30,5 @@ export default async function ParentPage() {
     })
   );
 
-  return <ParentView kids={kids} today={today} nowIso={new Date().toISOString()} />;
+  return <ParentView kids={kids} today={today} nowIso={new Date().toISOString()} coachEnabled={coachEnabled()} />;
 }

@@ -22,9 +22,12 @@ import { xpFor } from "@/lib/learn/mastery";
 import { answerText, gradeAnswer } from "@/lib/learn/grade";
 import { sessionForDate } from "@/lib/learn/stats";
 import { addReward, logAttempt, saveProgress, upsertSession } from "@/lib/learn/store";
+import type { CoachQuestion } from "@/lib/learn/coach-types";
 import QuestionCard from "../../components/question-card";
 import FeedbackBanner from "../../components/feedback-banner";
 import SummaryCard, { type MasteryChange } from "../../components/summary-card";
+import CoachSheet from "../../components/coach-sheet";
+import { useCoach } from "../../components/use-coach";
 
 interface PlayViewProps {
   learner: Learner;
@@ -35,6 +38,8 @@ interface PlayViewProps {
   blockParam?: string;
   skillParam?: string;
   modeParam?: string;
+  /** from the server page: Boolean(ANTHROPIC_API_KEY) */
+  coachEnabled: boolean;
 }
 
 interface Run {
@@ -72,6 +77,27 @@ function kindForSubject(subject: Subject): BlockKind {
 
 function parseMode(m: string | undefined): PracticeMode | null {
   return m === "learn" || m === "review" || m === "test" ? m : null;
+}
+
+const COACH_TEXT_MAX = 2000;
+
+/** Flattens the on-screen question (prompt, picture, passage, options) for the coach route. */
+function coachQuestion(q: Question, raw?: string): CoachQuestion {
+  let prompt = q.prompt;
+  if (q.display?.emoji) prompt += `\nPicture: ${q.display.emoji}`;
+  if (q.display?.grid) prompt += `\nGrid:\n${q.display.grid.map((row) => row.join(" | ")).join("\n")}`;
+  if (q.display?.svg) prompt += "\n(There is also a drawing the child can see but you cannot.)";
+  const options = q.type === "choice" ? q.options.map((o) => o.label ?? o.emoji ?? "(picture)") : undefined;
+  const childAnswer = raw === undefined ? undefined : q.type === "choice" ? (options?.[Number(raw)] ?? raw) : raw;
+  const passage = q.display?.passage ? `${q.display.passage.title}\n${q.display.passage.text}` : undefined;
+  return {
+    prompt: prompt.slice(0, COACH_TEXT_MAX),
+    options,
+    correctAnswer: answerText(q).slice(0, COACH_TEXT_MAX),
+    childAnswer: childAnswer?.slice(0, COACH_TEXT_MAX),
+    passage: passage?.slice(0, COACH_TEXT_MAX),
+    guidance: [q.hint, q.explain].filter((s) => s && s.trim()),
+  };
 }
 
 function buildRun(props: PlayViewProps): Run | string {
@@ -124,7 +150,7 @@ function formatClock(totalSeconds: number): string {
 }
 
 export default function PlayView(props: PlayViewProps) {
-  const { learner, today } = props;
+  const { learner, today, coachEnabled } = props;
   const [run] = useState(() => buildRun(props));
 
   if (typeof run === "string") {
@@ -148,10 +174,10 @@ export default function PlayView(props: PlayViewProps) {
     );
   }
 
-  return <Player run={run} learner={learner} today={today} />;
+  return <Player run={run} learner={learner} today={today} coachEnabled={coachEnabled} />;
 }
 
-function Player({ run, learner, today }: { run: Run; learner: Learner; today: string }) {
+function Player({ run, learner, today, coachEnabled }: { run: Run; learner: Learner; today: string; coachEnabled: boolean }) {
   const { skill } = run;
   const seedBase = run.progress.attempts;
   const initialStatus: SkillStatus = run.progress.status;
@@ -171,6 +197,28 @@ function Player({ run, learner, today }: { run: Run; learner: Learner; today: st
   const startRef = useRef(0);
   const questionStartRef = useRef(0);
   const failedRef = useRef<Array<() => Promise<unknown>>>([]);
+
+  // AI coach (optional; buttons only render when coachEnabled).
+  const coach = useCoach(learner.slug);
+  const coachAsk = coach.ask;
+  const askHint = useCallback(() => {
+    void coachAsk("Coach hint", { action: "hint", skillTitle: skill.kidTitle, question: coachQuestion(question) });
+  }, [coachAsk, skill.kidTitle, question]);
+  const askExplain = useCallback(() => {
+    if (!answered) return;
+    void coachAsk("Coach explains", { action: "explain", skillTitle: skill.kidTitle, question: coachQuestion(question, answered.raw) });
+  }, [coachAsk, skill.kidTitle, question, answered]);
+  const askFeedback = useCallback(
+    (text: string) => {
+      void coachAsk("Coach feedback", {
+        action: "feedback",
+        skillTitle: skill.kidTitle,
+        childText: text.slice(0, 1500),
+        question: coachQuestion(question),
+      });
+    },
+    [coachAsk, skill.kidTitle, question]
+  );
 
   const target = questionTargetFor(mode, run.minutes);
   const limitSeconds = run.minutes * 60;
@@ -410,6 +458,8 @@ function Player({ run, learner, today }: { run: Run; learner: Learner; today: st
               onSelfCheck={(ok) => submit(ok ? "self-check: yes" : "self-check: not yet", ok)}
               index={Math.min(qIndex + 1, target)}
               total={target}
+              onCoachHint={coachEnabled && mode === "learn" && phase === "question" ? askHint : undefined}
+              onCoachFeedback={coachEnabled && question.type === "text" && question.selfCheck ? askFeedback : undefined}
             />
           )}
 
@@ -453,6 +503,7 @@ function Player({ run, learner, today }: { run: Run; learner: Learner; today: st
           xp={answered.xp}
           nextLabel={isLast ? "Finish" : "Next"}
           onNext={handleNext}
+          onAskCoach={coachEnabled && !answered.correct && !(question.type === "text" && question.selfCheck) ? askExplain : undefined}
         />
       )}
 
@@ -466,6 +517,8 @@ function Player({ run, learner, today }: { run: Run; learner: Learner; today: st
           </div>
         </div>
       )}
+
+      <CoachSheet state={coach.state} onClose={coach.close} bigText={learner.grade <= 1} />
     </div>
   );
 }

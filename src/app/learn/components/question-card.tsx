@@ -15,13 +15,17 @@ interface QuestionCardProps {
   /** 1-based question number and total, for the header */
   index: number;
   total: number;
+  /** AI coach: Socratic hint before answering (learn mode only) */
+  onCoachHint?: () => void;
+  /** AI coach: feedback on the child's writing (selfCheck prompts) */
+  onCoachFeedback?: (text: string) => void;
 }
 
 /**
  * Renders one question. Mount with `key={questionNumber}` so its input state
  * resets for each new question.
  */
-export default function QuestionCard({ question, answered = null, onSubmit, onSelfCheck, index, total }: QuestionCardProps) {
+export default function QuestionCard({ question, answered = null, onSubmit, onSelfCheck, index, total, onCoachHint, onCoachFeedback }: QuestionCardProps) {
   const [value, setValue] = useState("");
   const [hintShown, setHintShown] = useState(false);
   const [modelShown, setModelShown] = useState(false);
@@ -169,6 +173,15 @@ export default function QuestionCard({ question, answered = null, onSubmit, onSe
                     )}
                   </div>
                 )}
+                {onCoachFeedback && value.trim().length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => onCoachFeedback(value)}
+                    className="tab-press mt-2 flex min-h-[48px] w-full items-center justify-center gap-1 rounded-2xl border border-indigo-200 bg-white text-sm font-bold text-indigo-700"
+                  >
+                    🤖 Coach feedback
+                  </button>
+                )}
               </>
             ) : (
               <form
@@ -247,6 +260,15 @@ export default function QuestionCard({ question, answered = null, onSubmit, onSe
               className="tab-press flex min-h-[44px] w-full items-center justify-center gap-1 rounded-xl text-sm font-semibold text-slate-400"
             >
               💡 Need a hint?
+            </button>
+          )}
+          {onCoachHint && (
+            <button
+              type="button"
+              onClick={onCoachHint}
+              className="tab-press mt-1 flex min-h-[44px] w-full items-center justify-center gap-1 rounded-xl text-sm font-semibold text-indigo-500"
+            >
+              🤖 Ask Coach for a hint
             </button>
           )}
         </div>

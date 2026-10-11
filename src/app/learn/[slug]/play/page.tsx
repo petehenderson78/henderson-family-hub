@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { notFound, redirect } from "next/navigation";
 import { loadLearnerBundleServer } from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
+import { coachEnabled } from "@/lib/learn/coach";
 import PlayView from "./play-view";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +41,7 @@ export default async function PlayPage({ params, searchParams }: PlayPageProps) 
       blockParam={query.block}
       skillParam={query.skill}
       modeParam={query.mode}
+      coachEnabled={coachEnabled()}
     />
   );
 }

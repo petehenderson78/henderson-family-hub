@@ -20,6 +20,8 @@ import {
 } from "@/lib/learn/stats";
 import { weekDates, weekdayShort } from "@/lib/learn/dates";
 import { updateLearnerSettings } from "@/lib/learn/store";
+import { fetchCoachLog } from "@/lib/learn/coach-client";
+import type { CoachLogMessage } from "@/lib/learn/coach-types";
 import { KID_EMOJI } from "../learn-home";
 import ProgressRing from "../components/progress-ring";
 import StreakFlame from "../components/streak-flame";
@@ -35,11 +37,13 @@ interface ParentViewProps {
   kids: ParentKid[];
   today: string;
   nowIso: string;
+  /** from the server page: Boolean(ANTHROPIC_API_KEY) */
+  coachEnabled: boolean;
 }
 
 const DOCS_URL = "https://github.com/petehenderson78/henderson-family-hub/blob/main/docs/learning/README.md";
 
-export default function ParentView({ kids, today, nowIso }: ParentViewProps) {
+export default function ParentView({ kids, today, nowIso, coachEnabled }: ParentViewProps) {
   const now = new Date(nowIso);
   const week = weekDates(today);
 
@@ -215,6 +219,23 @@ export default function ParentView({ kids, today, nowIso }: ParentViewProps) {
           </section>
         )}
 
+        {/* Coach log */}
+        {derived.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">Coach log</h2>
+            <p className="mt-1 text-xs text-slate-400">
+              {coachEnabled
+                ? "What the AI coach said to each kid, newest first."
+                : "The AI coach is off (set ANTHROPIC_API_KEY to turn it on). Earlier messages still show here."}
+            </p>
+            <div className="mt-3 space-y-3">
+              {derived.map((d) => (
+                <CoachLog key={d.learner.id} learner={d.learner} />
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Docs */}
         <section className="mt-8">
           <a
@@ -299,6 +320,94 @@ function SettingsEditor({ learner }: { learner: Learner }) {
       >
         {state === "saving" ? "Saving…" : state === "saved" ? "Saved ✓" : state === "error" ? "Couldn't save — tap to retry" : "Save settings"}
       </button>
+    </div>
+  );
+}
+
+type CoachLogState = { status: "idle" | "loading" | "error" | "ready"; messages: CoachLogMessage[] };
+
+function questionPromptOf(context: CoachLogMessage["context"]): string | null {
+  const q = context?.question;
+  if (typeof q !== "object" || q === null) return null;
+  const prompt = (q as Record<string, unknown>).prompt;
+  return typeof prompt === "string" && prompt.trim() ? prompt : null;
+}
+
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** Collapsible per-kid list of the last 20 coach messages (fetched on expand). */
+function CoachLog({ learner }: { learner: Learner }) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<CoachLogState>({ status: "idle", messages: [] });
+
+  async function load() {
+    setState((s) => ({ ...s, status: "loading" }));
+    try {
+      const messages = await fetchCoachLog(learner.slug, 20);
+      setState({ status: "ready", messages });
+    } catch {
+      setState((s) => ({ ...s, status: "error" }));
+    }
+  }
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && state.status === "idle") void load();
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
+      <button type="button" onClick={toggle} aria-expanded={open} className="flex min-h-[56px] w-full items-center justify-between px-4 text-left">
+        <span className="text-sm font-bold text-slate-900">
+          <span aria-hidden>{KID_EMOJI[learner.slug] ?? "⭐"}</span> {learner.name}
+        </span>
+        <span className="text-xs font-semibold text-slate-400">{open ? "Hide ▲" : "Show ▼"}</span>
+      </button>
+      {open && (
+        <div className="border-t border-slate-100 px-4 pb-4">
+          {state.status === "loading" && <p className="py-3 text-xs text-slate-400">Loading…</p>}
+          {state.status === "error" && (
+            <div className="flex items-center justify-between py-3">
+              <p className="text-xs font-semibold text-rose-600">Couldn&apos;t load the coach log.</p>
+              <button type="button" onClick={() => void load()} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                Retry
+              </button>
+            </div>
+          )}
+          {state.status === "ready" && state.messages.length === 0 && <p className="py-3 text-xs text-slate-400">No coach messages yet.</p>}
+          {state.status === "ready" && state.messages.length > 0 && (
+            <ul className="mt-3 space-y-2">
+              {state.messages.map((m) => {
+                const prompt = m.role === "child" ? questionPromptOf(m.context) : null;
+                const action = typeof m.context?.action === "string" ? m.context.action : null;
+                return (
+                  <li key={m.id} className={`rounded-xl p-3 ${m.role === "coach" ? "bg-indigo-50" : "bg-slate-50"}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-[10px] font-bold uppercase tracking-wider ${m.role === "coach" ? "text-indigo-600" : "text-slate-500"}`}>
+                        {m.role === "coach" ? "🤖 Coach" : m.role === "child" ? learner.name : "System"}
+                        {action ? ` · ${action}` : ""}
+                      </span>
+                      <span className="text-[10px] font-medium text-slate-400">{formatWhen(m.createdAt)}</span>
+                    </div>
+                    {prompt && <p className="mt-1 text-xs text-slate-500">Q: {prompt}</p>}
+                    <p className="mt-1 whitespace-pre-line text-sm text-slate-800">{m.text}</p>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {state.status === "ready" && (
+            <button type="button" onClick={() => void load()} className="mt-3 flex min-h-[40px] w-full items-center justify-center rounded-xl bg-slate-50 text-xs font-bold text-slate-600">
+              Refresh
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

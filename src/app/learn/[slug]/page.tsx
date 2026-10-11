@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { notFound, redirect } from "next/navigation";
 import { loadLearnerBundleServer } from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
+import { coachEnabled } from "@/lib/learn/coach";
 import MissionView from "./mission-view";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,7 @@ export default async function KidPage({ params }: { params: Promise<{ slug: stri
       xpTotal={bundle.xpTotal}
       today={today}
       nowIso={new Date().toISOString()}
+      coachEnabled={coachEnabled()}
     />
   );
 }

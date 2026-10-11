@@ -148,10 +148,10 @@ END $$;
 INSERT INTO learners (slug, name, grade, settings) VALUES
   (
     'cole', 'Cole', 3,
-    '{"dailyMinutes": 30, "blocks": {"math": 12, "reading": 12, "brain": 6}, "targetGrade": {"math": 4, "reading": 4, "reasoning": 3}, "rewardRate": 100}'::jsonb
+    '{"dailyMinutes": 30, "blocks": {"math": 12, "reading": 12, "brain": 6}, "weekend": {"math": 30, "reading": 30, "brain": 45}, "targetGrade": {"math": 5, "reading": 4, "reasoning": 3}, "rewardRate": 100, "stopBy": "20:30", "pausedUntil": null, "theme": {"currency": "Lightning Bucks", "levels": "baseball"}, "autoSpeak": false}'::jsonb
   ),
   (
     'lily', 'Lily', 1,
-    '{"dailyMinutes": 30, "blocks": {"math": 12, "reading": 12, "brain": 6}, "targetGrade": {"math": 2, "reading": 2, "reasoning": 1}, "rewardRate": 100}'::jsonb
+    '{"dailyMinutes": 30, "blocks": {"math": 12, "reading": 12, "brain": 6}, "weekend": {"math": 30, "reading": 30, "brain": 45}, "targetGrade": {"math": 2, "reading": 2, "reasoning": 1}, "rewardRate": 100, "stopBy": "20:30", "pausedUntil": null, "theme": {"currency": "Sparkle Points", "levels": "ballet"}, "autoSpeak": true}'::jsonb
   )
 ON CONFLICT (slug) DO NOTHING;
