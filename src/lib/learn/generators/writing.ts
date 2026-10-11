@@ -126,11 +126,11 @@ export const FRAGMENT_ITEMS: readonly FragmentItem[] = [
   { text: "The custodian lifted the lunchbox onto the bench.", kind: "sentence", subject: "The custodian", verb: "lifted" },
   // missing a subject
   { text: "Squeezed through a gap the size of a quarter.", kind: "no-subject", verb: "squeezed", fix: "The octopus squeezed through a gap the size of a quarter." },
-  { text: "Flew three thousand miles to the mountains of Mexico.", kind: "no-subject", verb: "flew", fix: "The monarchs flew three thousand miles to the mountains of Mexico." },
+  { text: "Flew thousands of miles to the mountains of Mexico.", kind: "no-subject", verb: "flew", fix: "The monarchs flew thousands of miles to the mountains of Mexico." },
   { text: "Counted the seconds between the flash and the thunder.", kind: "no-subject", verb: "counted", fix: "Priya counted the seconds between the flash and the thunder." },
   { text: "Dropped back into the line to rest.", kind: "no-subject", verb: "dropped", fix: "The tired leader dropped back into the line to rest." },
   { text: "Shoots out a cloud of dark ink.", kind: "no-subject", verb: "shoots", fix: "The octopus shoots out a cloud of dark ink." },
-  { text: "Sent news of the yacht race to shore without any wires.", kind: "no-subject", verb: "sent", fix: "Marconi sent news of the yacht race to shore without any wires." },
+  { text: "Tested his wireless telegraph at Twin Lights in 1899.", kind: "no-subject", verb: "tested", fix: "Marconi tested his wireless telegraph at Twin Lights in 1899." },
   { text: "Wrote down where every shot went.", kind: "no-subject", verb: "wrote", fix: "Leo wrote down where every shot went." },
   // missing a verb
   { text: "The raised red seams on the baseball.", kind: "no-verb", subject: "The raised red seams", fix: "The raised red seams on the baseball grab the air." },
@@ -209,8 +209,8 @@ export const COMBINE_ITEMS: readonly CombineItem[] = [
   {
     parts: ["Dash gathered acorns fast.", "He did not check them."],
     correct: "Dash gathered acorns fast, but he did not check them.",
-    wrong: ["Dash gathered acorns fast he did not check them.", "Dash gathered acorns fast, he did not check them.", "Dash gathered acorns fast because he did not check them."],
-    why: "The second idea is a contrast with the first (fast, but careless), so \"but\" fits. Not checking did not cause the speed.",
+    wrong: ["Dash gathered acorns fast he did not check them.", "Dash gathered acorns fast, he did not check them.", "Dash gathered acorns fast, so he checked them twice."],
+    why: "The second idea is a contrast with the first (fast, but careless), so \"but\" fits. The \"so\" version says he checked them twice, which is what Pip did, not Dash.",
   },
   {
     parts: ["Lightning heats the air.", "The air expands.", "We hear thunder."],
@@ -286,7 +286,7 @@ export const COMBINE_ITEMS: readonly CombineItem[] = [
   },
   {
     parts: ["De Mestral looked at a burr under a microscope.", "He saw hundreds of tiny hooks."],
-    correct: "When De Mestral looked at a burr under a microscope, he saw hundreds of tiny hooks.",
+    correct: "When de Mestral looked at a burr under a microscope, he saw hundreds of tiny hooks.",
     wrong: ["De Mestral looked at a burr under a microscope he saw hundreds of tiny hooks.", "De Mestral looked at a burr under a microscope, he saw hundreds of tiny hooks.", "De Mestral saw hundreds of tiny hooks, so he looked at a burr under a microscope."],
     why: "Looking came first and led to seeing the hooks, so \"when\" fits. The \"so\" version reverses the order.",
   },
@@ -315,9 +315,9 @@ export const COMBINE_ITEMS: readonly CombineItem[] = [
     why: "Ships not needing the lights is the reason they were turned off, so \"because\" fits. The \"so\" version makes the shutdown the cause.",
   },
   {
-    parts: ["The monarchs weigh less than a paper clip.", "They fly three thousand miles."],
-    correct: "Although the monarchs weigh less than a paper clip, they fly three thousand miles.",
-    wrong: ["The monarchs weigh less than a paper clip they fly three thousand miles.", "The monarchs weigh less than a paper clip, they fly three thousand miles.", "The monarchs weigh less than a paper clip, so they fly three thousand miles."],
+    parts: ["The monarchs weigh less than a paper clip.", "They fly thousands of miles."],
+    correct: "Although the monarchs weigh less than a paper clip, they fly thousands of miles.",
+    wrong: ["The monarchs weigh less than a paper clip they fly thousands of miles.", "The monarchs weigh less than a paper clip, they fly thousands of miles.", "The monarchs weigh less than a paper clip, so they fly thousands of miles."],
     why: "A tiny weight and a huge trip is a surprise, so \"although\" fits. The weight does not cause the trip.",
   },
   {
@@ -345,10 +345,10 @@ export const COMBINE_ITEMS: readonly CombineItem[] = [
     why: "Three actions by one person, in order, can share one subject: noticed, wrote, and gathered. The last version scrambles the order.",
   },
   {
-    parts: ["The gull dove again and again.", "He came up with nothing but weeds."],
-    correct: "The gull dove again and again, but he came up with nothing but weeds.",
-    wrong: ["The gull dove again and again he came up with nothing but weeds.", "The gull dove again and again, he came up with nothing but weeds.", "The gull dove again and again because he came up with nothing but weeds."],
-    why: "Trying hard and getting nothing is a contrast, so \"but\" fits. Coming up empty is not the reason he dove.",
+    parts: ["The water in the creek was high.", "The gull could not catch any fish."],
+    correct: "The water in the creek was high, so the gull could not catch any fish.",
+    wrong: ["The water in the creek was high the gull could not catch any fish.", "The water in the creek was high, the gull could not catch any fish.", "The water in the creek was high because the gull could not catch any fish."],
+    why: "The high water is the cause and the empty-handed gull is the result, so \"so\" fits. The \"because\" version makes the gull the cause of the high water.",
   },
   {
     parts: ["The hook is still growing.", "Waves carry sand northward every year."],
@@ -454,7 +454,7 @@ export const PUNCT_ITEMS: readonly PunctItem[] = [
   { focus: "list", correct: "The lemonade stand needed lemons, sugar, and paper cups.", wrong: ["The lemonade stand needed lemons sugar and paper cups.", "The lemonade stand, needed lemons, sugar, and paper cups.", "The lemonade stand needed lemons, sugar, and, paper cups."], why: "Three supplies are listed: lemons, sugar, and paper cups." },
   { focus: "list", correct: "The river flows past farms, forests, and cities.", wrong: ["The river flows past farms forests and cities.", "The river flows past, farms, forests, and cities.", "The river flows past farms, forests and, cities."], why: "Three places are listed: farms, forests, and cities." },
   { focus: "list", correct: "Carver made peanut flour, peanut milk, and soap.", wrong: ["Carver made peanut flour peanut milk and soap.", "Carver made, peanut flour, peanut milk, and soap.", "Carver made peanut flour, peanut milk, and, soap."], why: "Three products are listed: peanut flour, peanut milk, and soap." },
-  { focus: "list", correct: "The cousins climbed, dipped, and climbed again.", wrong: ["The cousins climbed dipped and climbed again.", "The cousins, climbed, dipped, and climbed again.", "The cousins climbed, dipped, and, climbed again."], why: "Three actions are listed; the subject \"The cousins\" is not part of the list." },
+  { focus: "list", correct: "The path climbed, dipped, and climbed again.", wrong: ["The path climbed dipped and climbed again.", "The path, climbed, dipped, and climbed again.", "The path climbed, dipped, and, climbed again."], why: "Three actions are listed; the subject \"The path\" is not part of the list." },
   // dialogue
   { focus: "dialogue", correct: "\"Look for clues,\" Dad said.", wrong: ["\"Look for clues\" Dad said.", "Look for clues, Dad said.", "\"Look for clues, Dad said.\""], why: "Only \"Look for clues\" was spoken, so only those words get quotation marks, with the comma inside." },
   { focus: "dialogue", correct: "Amara said, \"A good detective collects evidence first.\"", wrong: ["Amara said \"A good detective collects evidence first.\"", "Amara said, A good detective collects evidence first.", "Amara said, \"A good detective collects evidence first\"."], why: "A comma follows \"Amara said,\" and the period goes inside the closing quotation mark." },
@@ -465,15 +465,15 @@ export const PUNCT_ITEMS: readonly PunctItem[] = [
   { focus: "dialogue", correct: "\"I'm checking two sources too,\" said Priya's dad.", wrong: ["\"I'm checking two sources too\" said Priya's dad.", "\"I'm checking two sources too, said Priya's dad.\"", "I'm checking two sources too, said Priya's dad."], why: "The comma ends the speech inside the quotation marks, and the tag stays outside." },
   { focus: "dialogue", correct: "\"The fish are gone!\" the gull cried.", wrong: ["\"The fish are gone\"! the gull cried.", "\"The fish are gone!,\" the gull cried.", "The fish are gone! the gull cried."], why: "The exclamation point ends the speech and goes inside the quotation marks; no comma is added after it." },
   // apostrophes
-  { focus: "apostrophe", correct: "Biscuit's bed was covered in mud.", wrong: ["Biscuits bed was covered in mud.", "Biscuits' bed was covered in mud.", "Biscuit's bed was covered in mud's."], why: "One dog, Biscuit, owns the bed: Biscuit's. \"Mud\" owns nothing, so it gets no apostrophe." },
+  { focus: "apostrophe", correct: "Biscuit's bed was covered in mud from Owen's cleat.", wrong: ["Biscuits bed was covered in mud from Owens cleat.", "Biscuit's bed was covered in mud from Owens' cleat.", "Biscuits' bed was covered in mud from Owen's cleat."], why: "One dog, Biscuit, owns the bed, and one boy, Owen, owns the cleat, so each name gets 's." },
   { focus: "apostrophe", correct: "It's a long trip to Mexico, and the butterflies know the way.", wrong: ["Its a long trip to Mexico, and the butterflies know the way.", "It's a long trip to Mexico, and the butterflie's know the way.", "Its' a long trip to Mexico, and the butterflies know the way."], why: "\"It's\" means \"it is,\" so it needs the apostrophe. \"Butterflies\" is a plain plural, so it gets none." },
   { focus: "apostrophe", correct: "The moon reflects the sun's light.", wrong: ["The moon reflects the suns light.", "The moon reflect's the sun's light.", "The moon reflects the suns' light."], why: "The light belongs to one sun: sun's. The verb \"reflects\" never takes an apostrophe." },
-  { focus: "apostrophe", correct: "The geese didn't stop honking.", wrong: ["The geese did'nt stop honking.", "The geese didnt stop honking.", "The geese's didn't stop honking."], why: "\"Didn't\" is \"did not\" with the o missing, so the apostrophe goes where the o was. \"Geese\" is a plural, not an owner." },
+  { focus: "apostrophe", correct: "The leader's turn ended, but the geese didn't stop honking.", wrong: ["The leaders turn ended, but the geese didnt stop honking.", "The leader's turn ended, but the geese did'nt stop honking.", "The leaders' turn ended, but the geese didn't stop honking."], why: "One leader owns the turn: leader's. \"Didn't\" is \"did not\" with the o missing, so the apostrophe goes where the o was." },
   { focus: "apostrophe", correct: "The two towers' shapes told sailors where they were.", wrong: ["The two tower's shapes told sailors where they were.", "The two towers shapes told sailors where they were.", "The two towers' shape's told sailors where they were."], why: "Two towers own the shapes, so the apostrophe goes after the plural s: towers'. \"Shapes\" is a plain plural." },
   { focus: "apostrophe", correct: "Grandpa's scorebook was in a box, and its cover had faded.", wrong: ["Grandpas scorebook was in a box, and it's cover had faded.", "Grandpa's scorebook was in a box, and it's cover had faded.", "Grandpas' scorebook was in a box, and its cover had faded."], why: "Grandpa owns the scorebook: Grandpa's. \"Its cover\" means the cover belonging to it, so no apostrophe." },
   { focus: "apostrophe", correct: "Hana couldn't see the defender, but he could see her eyes.", wrong: ["Hana could'nt see the defender, but he could see her eyes.", "Hana couldnt see the defender, but he could see her eye's.", "Hana couldn't see the defender, but he could see her eyes'."], why: "\"Couldn't\" is \"could not\" with the o missing. \"Eyes\" is a plain plural, so it gets no apostrophe." },
   { focus: "apostrophe", correct: "The pitcher's wrist snapped, and the ball's seams grabbed the air.", wrong: ["The pitchers wrist snapped, and the balls seams grabbed the air.", "The pitcher's wrist snapped, and the balls' seams grabbed the air.", "The pitchers' wrist snapped, and the ball's seam's grabbed the air."], why: "One pitcher owns the wrist and one ball owns the seams, so each gets 's. \"Seams\" is a plain plural." },
-  { focus: "list", correct: "Galileo saw stripes, a spot, and four small moons.", wrong: ["Galileo saw stripes a spot and four small moons.", "Galileo saw, stripes, a spot, and four small moons.", "Galileo saw stripes, a spot, and, four small moons."], why: "Three things are listed: stripes, a spot, and four small moons." },
+  { focus: "list", correct: "Jupiter has stripes, a giant red spot, and more than ninety moons.", wrong: ["Jupiter has stripes a giant red spot and more than ninety moons.", "Jupiter has, stripes, a giant red spot, and more than ninety moons.", "Jupiter has stripes, a giant red spot, and, more than ninety moons."], why: "Three things are listed: stripes, a giant red spot, and more than ninety moons." },
   { focus: "list", correct: "The scorebook used diamonds, letters, and numbers.", wrong: ["The scorebook used diamonds letters and numbers.", "The scorebook used, diamonds, letters, and numbers.", "The scorebook used diamonds, letters, and, numbers."], why: "Three kinds of marks are listed: diamonds, letters, and numbers." },
   { focus: "list", correct: "The water cycle has evaporation, condensation, and precipitation.", wrong: ["The water cycle has evaporation condensation and precipitation.", "The water cycle, has evaporation, condensation, and precipitation.", "The water cycle has evaporation, condensation and, precipitation."], why: "Three steps are listed; the comma goes after each step except the last." },
   { focus: "dialogue", correct: "\"Make a prediction,\" Ms. Alvarez said.", wrong: ["\"Make a prediction\" Ms. Alvarez said.", "Make a prediction, Ms. Alvarez said.", "\"Make a prediction, Ms. Alvarez said.\""], why: "Only \"Make a prediction\" was spoken, so the quotation marks close after the comma, before the tag." },

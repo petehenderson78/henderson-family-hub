@@ -308,7 +308,7 @@ const READING: Skill[] = [
     intro: [
       "Good readers stop and think: what is this story mostly about?",
       "For order questions, find the words first, then, after and last in the story.",
-      "Example: 'In March they plant seeds. By summer the garden has corn.' Planting comes first, corn comes later.",
+      "Example: 'In May they plant seeds. By summer the garden has corn.' Planting comes first, corn comes later.",
     ],
   },
   {

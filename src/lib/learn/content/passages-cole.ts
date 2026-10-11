@@ -12,12 +12,12 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p01",
     title: "Why a Curveball Curves",
     level: 3,
-    words: 255,
+    words: 258,
     genre: "nonfiction",
     topic: "sports-science",
     text: [
       "A pitcher winds up, snaps her wrist, and the baseball seems to bend in the air on its way to the plate. The batter swings where the ball was, not where it is. Fans call it a curveball. For many years, some people argued that the curve was only a trick of the eye. Careful photographs finally settled the argument. The ball really does curve.",
-      "The secret is spin. When a pitcher throws a curveball, she lets the ball roll off her fingers so that it spins very fast, often more than twenty times before it reaches the catcher. The raised red seams grab the air as the ball turns and drag a thin layer of air along with them.",
+      "The secret is spin. When a pitcher throws a curveball, she lets the ball roll off her fingers so that it spins very fast. A big-league curveball can spin around twenty times before it reaches the catcher. The raised red seams grab the air as the ball turns and drag a thin layer of air along with them.",
       "Here is the important part. On one side of the ball, the spinning seams move in the same direction as the air rushing past, so the air on that side moves faster. On the other side, the seams fight against the rushing air, so the air there moves slower. Fast-moving air pushes on the ball less than slow-moving air does. The ball is gently shoved toward the faster side, a little more on every inch of its trip to the plate.",
       "That is why spin matters more than strength. A pitch with topspin dives downward. A pitch with sidespin slides left or right. Scientists observe the same push on spinning soccer balls and tennis balls. If you have ever watched a corner kick bend toward the goal, you have seen the same idea at work.",
     ].join("\n\n"),
@@ -72,14 +72,14 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p02",
     title: "The Lighthouse with Two Towers",
     level: 3.5,
-    words: 246,
+    words: 268,
     genre: "nonfiction",
     topic: "local-history",
     text: [
-      "High on a hill in Highlands, New Jersey, a brown stone building looks out over Sandy Hook Bay toward the ocean. It has two towers, and that is unusual. Most lighthouses have one. This one is called the Navesink Twin Lights, and the building that stands today was finished in 1862.",
+      "High on a hill in Highlands, New Jersey, a brown stone building looks out over Sandy Hook Bay toward the ocean. It has two towers, and that is unusual. Most lighthouses have one. This one is called the Navesink Twin Lights, and the building that stands today was finished in 1862. It replaced an older pair of towers on the same hill.",
       "The towers are not twins at all if you look closely. The north tower is eight-sided, and the south tower is square. The builders did that on purpose. At night, a sailor could count two lights and know exactly which part of the coast he was passing. In daylight, the two different shapes told him the same thing. The hill is so high that the lights could be seen far out at sea.",
-      "Twin Lights was a testing ground for new ideas. In 1841, it became the first lighthouse in the United States to use a Fresnel lens, a lens made of many glass rings that gathers a lamp's light into one powerful beam. In 1899, an inventor named Guglielmo Marconi set up his wireless telegraph on the hill and sent news of a yacht race to shore without any wires. People were amazed.",
-      "The lights were turned off in 1949 because ships no longer needed them, and today the building is a museum. Visitors can climb the north tower and look at the same bay the keepers watched. The towers no longer guide ships, but they still help people see how a lighthouse worked.",
+      "Twin Lights was a testing ground for new ideas. In 1841, it became the first lighthouse in the United States to use a Fresnel lens, a lens made of many glass rings that gathers a lamp's light into one powerful beam. In 1899, an inventor named Guglielmo Marconi set up a wireless telegraph station on the hill. Reports about a yacht race far out at sea traveled from a ship to the station through the air, without any wires. People were amazed.",
+      "The lights were turned off in 1949 because ships no longer needed them, and today the building is a museum. Visitors can climb the north tower and look at the same bay the keepers watched. No keepers live there now, but the towers still help people see how a lighthouse worked.",
     ].join("\n\n"),
     vocab: [
       { word: "unusual", meaning: "not common; different from most others" },
@@ -118,7 +118,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
         prompt: "Which of these events happened first?",
         options: [
           "The lights were turned off",
-          "Marconi sent news of a yacht race from the hill",
+          "Marconi set up a wireless telegraph station on the hill",
           "The lighthouse began using a Fresnel lens",
           "The building that stands today was finished",
         ],
@@ -209,7 +209,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     ],
     questions: [
       {
-        kind: "main-idea",
+        kind: "author-purpose",
         prompt: "What is the author's main purpose in this passage?",
         options: [
           "To warn readers that octopuses are dangerous",
@@ -494,13 +494,13 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p09",
     title: "A River's Long Journey",
     level: 3.5,
-    words: 253,
+    words: 266,
     genre: "nonfiction",
     topic: "geography",
     text: [
       "Every river has a beginning, called its source, and an end, called its mouth. The Mississippi River, the most famous river in the United States, begins as a stream so narrow that a child can wade across it. Its source is Lake Itasca, a small lake in the pine forests of Minnesota.",
       "From there the river flows south for more than two thousand miles. Along the way, other rivers pour into it. A river that joins a bigger river is called a tributary. The Missouri River joins from the west, and the Ohio River joins from the east. Each tributary adds more water, so the Mississippi grows wider and stronger as it travels. By the time it reaches the city of St. Louis, it is already more than a thousand feet across.",
-      "The river carries more than water. It carries tiny bits of soil and sand, called sediment, washed in from farms and hills. Over thousands of years, the river has dropped this sediment where it meets the sea, building new land. The fan-shaped land at the mouth of the Mississippi is called a delta, and it is still growing and changing today.",
+      "The river carries more than water. It carries tiny bits of soil and sand, called sediment, washed in from farms and hills. Over thousands of years, the river has dropped this sediment where it meets the sea, building new land. Land built from sediment at the mouth of a river is called a delta. The Mississippi's delta spreads into the sea like the toes of a bird's foot, and it is still changing today.",
       "The journey ends in Louisiana, past the city of New Orleans, where the river empties into the Gulf of Mexico. Water that began as a trickle in a cold northern forest finally flows into warm, salty waves. Boats, barges, and birds depend on the river along its entire route, and so do the millions of people who live beside it.",
     ].join("\n\n"),
     vocab: [
@@ -527,7 +527,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
         prompt: "Why is the Mississippi much wider near St. Louis than it is in Minnesota?",
         options: [
           "Because the land in Missouri is flatter",
-          "Because tributaries such as the Missouri River have added their water by then",
+          "Because tributaries have added more water to it along the way",
           "Because the river picks up sediment and the sediment makes it wider",
           "Because St. Louis built the river wider for boats",
         ],
@@ -541,11 +541,11 @@ export const COLE_PASSAGES: ReadingPassage[] = [
         options: [
           "A narrow stream at the start of a river",
           "A boat that carries sediment",
-          "Fan-shaped land built from sediment where a river meets the sea",
+          "Land built from sediment where a river meets the sea",
           "A deep part of the river near a city",
         ],
         answerIndex: 2,
-        explain: "Paragraph 3 defines it directly: the fan-shaped land at the mouth of the Mississippi is called a delta, built from dropped sediment.",
+        explain: "Paragraph 3 defines it directly: land built from sediment at the mouth of a river is called a delta.",
         hint: "The definition is given in the same sentence as the word.",
       },
     ],
@@ -614,12 +614,12 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p11",
     title: "Why a Basketball Bounces",
     level: 3.5,
-    words: 246,
+    words: 245,
     genre: "nonfiction",
     topic: "sports-science",
     text: [
       "Drop a basketball on the gym floor and it springs right back toward your hand. Drop a bowling ball and it just thuds. The difference is not the rubber. The difference is the air trapped inside.",
-      "When you pump up a basketball, you force far more air into it than would fit in that space normally. The squeezed air pushes outward on every part of the inside of the ball. That is why a full ball feels hard and round. When the ball hits the floor, the bottom flattens for an instant, and the air inside gets squeezed even more. Squeezed air pushes back harder. That extra push shoves the ball off the floor and back into the air.",
+      "When you pump up a basketball, you force more air into it than would fit in that space normally. The squeezed air pushes outward on every part of the inside of the ball. That is why a full ball feels hard and round. When the ball hits the floor, the bottom flattens for an instant, and the air inside gets squeezed even more. Squeezed air pushes back harder. That extra push shoves the ball off the floor and back into the air.",
       "Temperature changes how well this works. Air is made of tiny particles that are always moving. When the air is warm, the particles move quickly and push hard. When the air is cold, they slow down and push less. That is why a basketball left in a cold garage feels soft and bounces low, while the same ball bounces higher after it warms up. Nothing leaked out. The air inside just stopped pushing as hard.",
       "A ball never bounces quite as high as the spot you dropped it from. Each bounce loses a little energy as sound and heat. You can hear the loss, that slap on the floor, and you can feel it if you press on a ball that has just been bounced many times.",
     ].join("\n\n"),
@@ -674,17 +674,17 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p12",
     title: "The Secret Inside a Lock",
     level: 3.5,
-    words: 238,
+    words: 279,
     genre: "nonfiction",
     topic: "how-it-works",
     text: [
       "You slide a key into the front door, turn it, and the lock clicks open. A different key will not turn at all. The reason is hidden inside a metal cylinder no bigger than your thumb, and it is a clever system of tiny pins.",
-      "Inside the lock is a small turning part called the plug. Above the plug sits a row of little metal pins, usually five of them, and each pin is a different length. Springs push the pins down so that they poke into the plug. As long as any pin is sticking into the plug, the plug is stuck and cannot turn. That is the locked position.",
-      "A key has a row of bumps and dips along its edge. When the correct key slides in, each bump lifts one pin by exactly the right amount. Every pin rises until its bottom edge lines up with the top of the plug. At that moment, nothing is blocking the plug, so it turns freely and the door opens.",
-      "A wrong key fails because its bumps are the wrong heights. Some pins are lifted too far, and others are not lifted enough, so at least one pin still blocks the plug. Even a key that is almost right will not work. Locksmiths say that a lock does not know a key by its shape. It knows the key by the exact heights of the pins it lifts.",
+      "Inside the lock is a small turning part called the plug. Above the plug is a row of tiny holes, usually five of them. Each hole holds a stack of two metal pins, a bottom pin and a top pin, with a spring pressing down on them. The bottom pins are all different lengths. As long as any pin sits across the edge of the plug, partly in and partly out, the plug is stuck and cannot turn. That is the locked position.",
+      "A key has a row of bumps and dips along its edge. When the correct key slides in, each bump pushes up one stack of pins by exactly the right amount. The crack between each bottom pin and top pin rises until it lines up with the edge of the plug. At that moment, no pin crosses that edge, so the plug turns freely and the door opens.",
+      "A wrong key fails because its bumps are the wrong heights. If a bump is too low, a top pin still pokes down into the plug. If a bump is too high, a bottom pin pokes up out of the plug. Either way, at least one pin blocks the turn. Even a key that is almost right will not work. A lock does not care what a key looks like. It only cares about the exact height of every pin the key lifts.",
     ].join("\n\n"),
     vocab: [
-      { word: "cylinder", meaning: "a solid shape like a tube or can, round on the ends" },
+      { word: "cylinder", meaning: "a shape like a can or a tube, with two flat, round ends" },
       { word: "system", meaning: "a set of parts that work together to do a job" },
       { word: "exact", meaning: "completely correct, not even a little bit off" },
     ],
@@ -712,7 +712,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
           "The springs will stop pushing the pins down",
         ],
         answerIndex: 1,
-        explain: "Paragraph 3 says each bump must lift a pin by exactly the right amount, and paragraph 4 says a key that is almost right will not work because at least one pin still blocks the plug.",
+        explain: "Paragraph 3 says each bump must push up its pins by exactly the right amount, and paragraph 4 says that if a bump is too low, a top pin still pokes down into the plug. Even a key that is almost right will not work.",
         hint: "What does the passage say about a key that is almost right?",
       },
       {
@@ -734,13 +734,13 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p13",
     title: "The Butterflies That Fly to Mexico",
     level: 3.5,
-    words: 234,
+    words: 236,
     genre: "nonfiction",
     topic: "animals",
     text: [
       "A monarch butterfly weighs less than a paper clip. Its orange and black wings look as fragile as tissue paper. Yet every fall, millions of monarchs from the eastern United States and Canada fly as far as three thousand miles to spend the winter in the mountains of central Mexico.",
       "The trip is remarkable for another reason. The butterflies that make it have never been to Mexico before. Their parents and grandparents were born in the north and lived only a few weeks each. Somehow the fall butterflies find the same mountain forests their great-grandparents left in the spring. Scientists believe they use the position of the sun to steer.",
-      "The fall monarchs are different from the summer ones. Instead of living for a few weeks, they live for about eight months. They stop growing and save their energy for the journey. When they reach Mexico, they gather by the millions on the branches of tall fir trees, so thick that the branches bend. Clustering together helps them stay warm during cool mountain nights.",
+      "The fall monarchs are different from the summer ones. Instead of living for a few weeks, they live for about eight months. They put off laying eggs and save their energy for the journey. When they reach Mexico, they gather by the millions on the branches of tall fir trees, so thick that the branches bend. Clustering together helps them stay warm during cool mountain nights.",
       "In spring, the same butterflies begin flying north. They lay their eggs on milkweed plants, because monarch caterpillars eat only milkweed, and then they die. Their children continue the trip north, and the cycle begins again. People across the country now plant milkweed in gardens and along roads so that the next generation of travelers will have what it needs.",
     ].join("\n\n"),
     vocab: [
@@ -767,7 +767,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
         prompt: "Why is it important that people plant milkweed, according to the passage?",
         options: [
           "Because monarchs cluster on milkweed to stay warm in Mexico",
-          "Because monarch caterpillars eat only milkweed, and the next generation must be born in the north",
+          "Because monarchs lay their eggs on milkweed, and their caterpillars eat nothing else",
           "Because milkweed helps butterflies use the sun to steer",
           "Because milkweed grows well on roadsides",
         ],
@@ -794,14 +794,14 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p14",
     title: "The Scientist Who Loved Peanuts",
     level: 3.5,
-    words: 259,
+    words: 262,
     genre: "nonfiction",
     topic: "biography",
     text: [
       "George Washington Carver was born in Missouri around 1864, near the end of the Civil War. He was born enslaved, and his life began with hardship. As a boy, he was often sick, so instead of doing heavy farm work he spent hours in the woods and fields studying plants. Neighbors called him the plant doctor because he could nurse a dying garden back to health.",
       "Carver wanted an education badly, and he walked from town to town to find schools that would accept him. Eventually he earned a college degree in agriculture in Iowa. In 1896, he moved to Alabama to teach at the Tuskegee Institute, a school for Black students, and he stayed there for the rest of his life.",
-      "The farmers around Tuskegee had a problem. They planted cotton every year, and cotton slowly wore out the soil. Carver observed that peanuts and sweet potatoes did the opposite. They put nutrients back into the ground. He urged farmers to rotate their crops, planting cotton one year and peanuts the next. Gradually the tired fields grew healthy again.",
-      "Then a new problem appeared. Farmers were growing mountains of peanuts, but hardly anyone wanted to buy them. Carver went to his laboratory and searched for new uses. He made peanut flour, peanut milk, soap, dyes, and more than three hundred other products. He shared his discoveries freely, traveling with a wagon to show farmers what he had learned. By the time he died in 1943, the peanut had become one of the most valuable crops in the South.",
+      "The farmers around Tuskegee had a problem. They planted cotton every year, and cotton slowly wore out the soil. Carver observed that peanuts did the opposite. Peanut plants put nutrients back into the ground. He urged farmers to rotate their crops, planting cotton one year and peanuts the next. Gradually the tired fields grew healthy again.",
+      "Then a new problem appeared. Farmers were growing mountains of peanuts, but hardly anyone wanted to buy them. Carver went to his laboratory and searched for new uses. He made peanut flour, peanut milk, soap, dyes, and much more, about three hundred uses for the peanut in all. He shared his discoveries freely, traveling with a wagon to show farmers what he had learned. By the time he died in 1943, the peanut had become one of the most valuable crops in the South.",
     ].join("\n\n"),
     vocab: [
       { word: "agriculture", meaning: "the science of farming and growing crops" },
@@ -858,7 +858,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     genre: "nonfiction",
     topic: "local-history",
     text: [
-      "At the northern tip of Sandy Hook, a narrow strip of sand that reaches into New York Harbor, stands a white, eight-sided tower that has been guiding ships since 1764. The Sandy Hook Lighthouse is the oldest lighthouse in the United States that is still working. Its light has shone through the American Revolution, two world wars, and countless storms.",
+      "Near the northern end of Sandy Hook, a narrow strip of sand that reaches toward New York Harbor, stands a white, eight-sided tower that has been guiding ships since 1764. The Sandy Hook Lighthouse is the oldest lighthouse in the United States that is still working. Its light has shone through the American Revolution, two world wars, and countless storms.",
       "The lighthouse owes its existence to worried merchants in New York City. Ships carrying their goods had to pass the dangerous sandbars near Sandy Hook, and wrecks were costing them money. The merchants raised the money to build the tower by selling lottery tickets. The walls at the base are several feet thick, which helps explain why the tower has survived for more than two and a half centuries.",
       "The most remarkable thing about the lighthouse is something you can only notice by comparing two facts. When it was finished, the tower stood about five hundred feet from the tip of the hook. Today it stands about a mile and a half from the tip. The lighthouse has not moved an inch. Instead, waves and currents have carried sand northward year after year, and the land itself has grown. The hook is still growing today.",
       "During the Revolutionary War, British soldiers held Sandy Hook and kept the light burning to guide their own ships into the harbor. Later, the area became an army fort, and now it is part of a national park. Visitors who climb the ninety-five steps to the top can see the harbor, the ocean, and, on a clear day, the towers of New York City in the distance.",
@@ -949,7 +949,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
         prompt: "How did Galileo figure out that the four lights were moons and not stars?",
         options: [
           "They were brighter than any star",
-          "They changed position beside Jupiter night after night, which stars do not do",
+          "They changed position beside Jupiter night after night, as if they were circling it",
           "He could see their craters through his telescope",
           "He read about them in a book",
         ],
@@ -976,13 +976,13 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p17",
     title: "Ten Days Across the Country",
     level: 4,
-    words: 277,
+    words: 274,
     genre: "nonfiction",
     topic: "history",
     text: [
-      "In 1860, a letter mailed from Missouri could take weeks to reach California. It traveled by slow wagon or by ship all the way around South America. A group of businessmen believed they could do better. They promised to carry mail nearly two thousand miles, from St. Joseph, Missouri, to Sacramento, California, in just ten days. Their service was called the Pony Express.",
+      "In 1860, a letter mailed from Missouri could take weeks to reach California. It traveled by bumpy stagecoach or on a long ship voyage. A group of businessmen believed they could do better. They promised to carry mail nearly two thousand miles, from St. Joseph, Missouri, to Sacramento, California, in just ten days. Their service was called the Pony Express.",
       "The system worked like a relay race. A rider galloped about ten to fifteen miles to a small station, where a fresh horse stood saddled and waiting. He flung the mail pouch onto the new horse and was off again within two minutes. After seventy-five miles or more, a new rider took over. Day and night, through deserts, mountains, and snowstorms, the mail never stopped moving. The company built more than one hundred fifty stations along the route.",
-      "Riders had to be light so the horses could run fast, so the company hired young men and boys who weighed less than one hundred twenty-five pounds. The pay was good, but the work was lonely and often dangerous. Each rider carried the mail in a leather cover with four locked pockets that fit over the saddle, which could be moved from horse to horse in seconds.",
+      "Riders had to be light so the horses could run fast, so the company hired young men and boys who weighed less than one hundred twenty-five pounds. The pay was good, but the work was lonely and often dangerous. Each rider carried the mail in a leather cover with four mail pockets that fit over the saddle, which could be moved from horse to horse in seconds.",
       "The Pony Express lasted only eighteen months. In October 1861, workers finished a telegraph line that connected the East and West coasts. A message that had taken ten days by horse could now cross the country in minutes. Two days after the line was completed, the Pony Express closed. It had never made a profit, but its riders had proved that the West and the East could be connected.",
     ].join("\n\n"),
     vocab: [
@@ -1036,14 +1036,14 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p18",
     title: "Water on a Journey That Never Ends",
     level: 4,
-    words: 268,
+    words: 272,
     genre: "nonfiction",
     topic: "science",
     text: [
       "The water in your glass is older than the dinosaurs. Earth has had nearly the same amount of water for billions of years, and it keeps moving through the same loop again and again. Scientists call this loop the water cycle, and the sun is the engine that drives it.",
       "The cycle begins when the sun warms oceans, lakes, and puddles. Some of the water turns into an invisible gas called water vapor and rises into the air. This step is called evaporation. You see it in action when a wet sidewalk dries after a storm. Plants help, too, releasing water vapor from their leaves.",
       "High in the sky, the air is cold. Cold air cannot hold as much water vapor, so the vapor changes back into tiny droplets of liquid water that cling to specks of dust. This step is called condensation, and billions of these droplets together form a cloud. The same thing happens on the outside of a cold glass on a summer day.",
-      "When the droplets bump into each other and grow heavy enough, they fall as precipitation: rain, snow, sleet, or hail. Some of that water soaks into the ground and feeds plants or seeps down to underground rivers. The rest runs downhill into streams, which flow into rivers, which flow back to the sea. Then the sun warms the sea, and the journey begins again.",
+      "When the droplets bump into each other and grow heavy enough, they fall as precipitation: rain, snow, sleet, or hail. Some of that water soaks into the ground, where it feeds plants or seeps deep down into the spaces between rocks. The rest runs downhill into streams, which flow into rivers, which flow back to the sea. Then the sun warms the sea, and the journey begins again.",
       "Because the cycle is a closed loop, the water that falls on Middletown today may once have floated over the Pacific Ocean or frozen in a glacier. It has been everywhere, and it is not finished traveling.",
     ].join("\n\n"),
     vocab: [
@@ -1281,7 +1281,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p22",
     title: "The Squirrel Who Counted Twice",
     level: 3,
-    words: 234,
+    words: 230,
     genre: "fiction",
     topic: "fable",
     text: [
@@ -1289,7 +1289,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
       "When the leaves began to turn, both squirrels started gathering acorns for winter. Dash raced across the meadow, snatching acorns and stuffing them into holes as fast as he could. \"One hundred!\" he shouted by lunchtime. \"I am done for the year.\" He spent the rest of autumn napping in the sun.",
       "Pip worked differently. She buried ten acorns, then went back and counted them. She tapped each one to make sure it was not hollow. Twice she found a cracked acorn and replaced it. By the time the first frost came, she had counted every pile two times. Dash laughed. \"You are wasting the warm days,\" he said.",
       "Winter arrived early and hard. Dash dug up his first hole and found only six acorns. He had counted too fast and stored fewer than he thought. Worse, half of them were hollow, eaten from the inside by worms. By January, his holes were empty.",
-      "Pip's piles were exactly as full as she had written in her memory. She shared with Dash, but only after he admitted something. \"Fast is not the same as finished,\" he said. Pip nodded and handed him an acorn. From then on, Dash counted twice too.",
+      "Pip's piles were exactly as full as she remembered. She shared with Dash, but only after he admitted something. \"Fast is not the same as finished,\" he said. Pip nodded and handed him an acorn. From then on, Dash counted twice too.",
     ].join("\n\n"),
     vocab: [
       { word: "hollow", meaning: "empty inside" },
@@ -1403,13 +1403,13 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p24",
     title: "Grandpa's Scorebook",
     level: 3,
-    words: 266,
+    words: 271,
     genre: "fiction",
     topic: "sports",
     text: [
       "Nadia found the old scorebook in a box in Grandpa's garage. Its cover was soft and faded, and inside, every page was a grid of tiny diamonds filled with pencil marks. \"That one is from 1979,\" Grandpa said, looking over her shoulder. \"I kept score for every game my brother pitched.\"",
-      "Nadia loved baseball, but the marks looked like a secret code. Grandpa explained. A diamond with its corners filled in meant a run scored. A letter K meant a strikeout. A number like 6-3 meant the shortstop threw the ball to first base for an out. \"You do not need me to tell you what happened,\" he said. \"The book will tell you, if you read it carefully.\"",
-      "She turned to the last game in the book. The top of the final column showed the score tied, three to three. In the bottom of the last inning, the first batter had a K. The second batter had a 6-3. Then the third batter's diamond was filled in completely, with the word HR written beside it.",
+      "Nadia loved baseball, but the marks looked like a secret code. Grandpa explained. A diamond that was colored in meant a run scored. A letter K meant a strikeout. A number like 6-3 meant the shortstop threw the ball to first base for an out. \"You do not need me to tell you what happened,\" he said. \"The book will tell you, if you read it carefully.\"",
+      "She turned to the last game in the book. The top of the final column showed the score tied, three to three. In the bottom of the last inning, with his brother's team at bat, the first batter had a K. The second batter had a 6-3. Then the third batter's diamond was filled in completely, with the word HR written beside it.",
       "\"Your brother's team won,\" Nadia said. Grandpa raised an eyebrow. \"How do you know?\" She pointed. \"It was tied. Then there were two outs, and then someone hit a home run in the bottom of the last inning. The game would have ended right there.\"",
       "Grandpa was quiet for a moment. Then he turned the book sideways and pointed to a name written in the margin, next to the home run. It was his own name. \"I did not just keep score that day,\" he said. \"I got to bat.\"",
     ].join("\n\n"),
@@ -1464,11 +1464,11 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p25",
     title: "The Case of the Moving Lunchbox",
     level: 3.5,
-    words: 259,
+    words: 287,
     genre: "fiction",
     topic: "mystery",
     text: [
-      "Every morning, Theo put his blue lunchbox in the third cubby from the left. Every afternoon, for three days in a row, he found it sitting on the bench by the classroom door. Nothing was missing from it. It had simply moved.",
+      "Theo's dad dropped him off early every morning, so Theo was always the first to put his lunchbox away. It went in the third cubby from the left, on the bottom row. But for three days in a row, when the bell rang and the class came in, he found his blue lunchbox sitting on the bench by the classroom door. Nothing was missing from it. It had simply moved.",
       "\"Someone is playing a trick on me,\" Theo told his friend Amara. Amara, who wanted to be a detective, pulled out her notebook. \"Maybe,\" she said. \"But a good detective collects evidence before she names a suspect. What do we know for sure?\"",
       "They made a list. The lunchbox moved only on Monday, Tuesday, and Wednesday. It never moved on Thursday or Friday. It was always placed neatly on the bench, never thrown. And on all three mornings, Amara remembered, the floor under the cubbies had been shiny and a little damp when they walked in.",
       "On Thursday morning, Amara arrived early and watched. The floor under the cubbies was dry. The lunchbox stayed put all day. On the following Monday, she arrived early again. This time she saw Mr. Patel, the custodian, pushing a mop across the floor under the cubbies. Before he mopped, he lifted everything off the bottom row and set it on the bench. When he finished, he put most of it back, but the third cubby was hidden behind the open door, and he missed it.",
@@ -1592,7 +1592,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     text: [
       "A young gull and an old heron shared a stretch of marsh where a creek met the bay. The gull was always hungry and always in a hurry. The heron stood so still on her long legs that strangers sometimes mistook her for a stick.",
       "One morning the water in the creek was high and brown. The gull dove again and again, splashing and squawking, and came up with nothing but a mouthful of weeds. \"The fish are gone!\" he cried. \"This creek is useless.\" He flapped off to try his luck at the dump.",
-      "The heron did not move. She had watched this creek through many seasons, and she had noticed a pattern. Twice each day the water rose and spread over the marsh grass. Twice each day it drained back toward the bay. When it drained, it pulled small fish through a narrow gap between two rocks, and for one short hour they were easy to catch.",
+      "The heron did not move. She had observed this creek through many seasons, and she had noticed a pattern. Twice each day the water rose and spread over the marsh grass. Twice each day it drained back toward the bay. When it drained, it pulled small fish through a narrow gap between two rocks, and for one short hour they were easy to catch.",
       "So the heron waited. The sun climbed. The water began to slip away, slowly at first and then faster, and silver flashes crowded into the gap between the rocks. The heron struck once, twice, three times. By the time the gull returned, tired and empty, she was full.",
       "\"How did you know?\" the gull demanded. \"I did not know,\" said the heron. \"I observed. The creek has been telling the same story every day. You never stayed long enough to hear the end of it.\" Patience and careful watching will catch what hurry chases away.",
     ].join("\n\n"),
@@ -1625,7 +1625,7 @@ export const COLE_PASSAGES: ReadingPassage[] = [
           "She had caught fish in the same spot earlier that morning",
         ],
         answerIndex: 1,
-        explain: "Paragraph 3 says the heron had watched the creek through many seasons and noticed a pattern, and that when the water drained it pulled small fish through the gap. The gull failed because the water was still high.",
+        explain: "Paragraph 3 says the heron had observed the creek through many seasons and noticed a pattern, and that when the water drained it pulled small fish through the gap. The gull failed because the water was still high.",
         hint: "What pattern had the heron noticed about the draining water?",
       },
       {
@@ -1647,14 +1647,14 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p28",
     title: "The Backup Keeper",
     level: 3.5,
-    words: 265,
+    words: 281,
     genre: "fiction",
     topic: "sports",
     text: [
       "Leo was the backup goalkeeper on the Lincroft Lightning, which meant he spent most games standing beside Coach Rivera with a water bottle. He could have sulked. Instead, he kept a small notebook in his jacket pocket.",
-      "Every time an opposing player took a shot, Leo wrote down the player's number and where the ball went: left, right, high, or low. By the fourth game, the notebook was full of little marks. He noticed that the other team's number nine, their best scorer, had taken eleven shots this season. Nine of them had gone low and to the keeper's left. \"She plants her right foot and swings across,\" Leo told Coach Rivera. \"She almost always goes to the same corner.\"",
-      "Coach nodded but did not say much. Then, in the second half of the biggest game of the fall, the starting keeper twisted her ankle. \"Leo,\" Coach said, \"you're in.\"",
-      "The score was tied with six minutes left when number nine broke free and raced toward the goal. Leo's heart hammered. For a moment he wanted to guess. Then he remembered the notebook: low, left, nine times out of eleven. He stayed on his feet, shaded a step to his left, and waited. Number nine planted her right foot and swung. The ball skidded low toward the left corner, and Leo was already there. He smothered it.",
+      "Every time an opposing player took a shot, Leo wrote down the player's number and where the ball went: left, right, high, or low. By the fourth game, the notebook was full of little marks. He noticed that the Red Hawks' number nine, their best scorer, had taken eleven shots in two games against the Lightning. Nine of them had gone low and to the keeper's left. \"She plants her right foot and swings across,\" Leo told Coach Rivera. \"She almost always goes to the same corner.\"",
+      "Coach nodded but did not say much. Then, in the second half of the biggest game of the fall, against the Red Hawks, the starting keeper twisted her ankle. \"Leo,\" Coach said, \"you're in.\"",
+      "The score was tied with six minutes left when number nine broke free and raced toward the goal. Leo's heart hammered. For a moment he wanted to guess. Then he remembered the notebook: low, left, nine times out of eleven. He stayed on his feet, shaded a step to his left, and waited. Number nine planted her right foot and swung. The ball skidded low toward the left corner, and Leo was already there. He dropped onto the ball and smothered it against the grass.",
       "The Lightning scored a minute later and won. In the car, Leo's dad asked how he had known where to dive. \"I didn't know,\" Leo said. \"I read my notes. Eleven shots is not a guess. It's evidence.\"",
     ].join("\n\n"),
     vocab: [
@@ -1769,15 +1769,15 @@ export const COLE_PASSAGES: ReadingPassage[] = [
     id: "cole-p30",
     title: "Two Weather Reports",
     level: 4,
-    words: 272,
+    words: 266,
     genre: "fiction",
     topic: "family",
     text: [
       "Saturday's baseball game was at ten o'clock, and at eight the sky over Middletown was a soft, harmless gray. Priya's dad glanced at his phone. \"Thirty percent chance of rain,\" he read. \"We'll probably play.\"",
       "Priya was not satisfied with one source. She opened the radar map on the family tablet. A wide green and yellow band of rain stretched across Pennsylvania, moving east. She pressed the play button and watched the last two hours loop. The band had moved about thirty miles each hour. She measured with her finger. Middletown was roughly sixty miles ahead of the leading edge.",
       "\"The app says thirty percent,\" she told her dad, \"but the radar says the rain will be here in about two hours. That's right at game time.\" Dad looked at the loop and frowned. \"The thirty percent is for the whole day,\" he said slowly. \"It's not telling us about ten o'clock in particular.\" Priya nodded. \"The percent is an estimate for the day. The radar is an observation of what is actually happening right now.\" They agreed on a plan: go to the field, bring the rain jackets, and expect a delay.",
-      "At nine fifty-five, the first fat drops hit the dugout roof. By ten fifteen, the umpire called a thirty-minute delay, and most of the other families were running for their cars. Priya's team sat dry under the dugout in their jackets, playing cards.",
-      "The rain passed at ten forty, exactly as the loop had suggested, and the game started late under a washed blue sky. Priya's dad bumped her shoulder. \"Next time,\" he said, \"I'm checking two sources too.\"",
+      "At nine fifty-five, the first fat drops hit the dugout roof. By ten fifteen, the umpire called a thirty-minute delay, and most of the other families were running for their cars. Priya's team sat dry in the dugout in their jackets, playing cards.",
+      "The rain passed at ten forty, and the game started late under a washed blue sky. Priya's dad bumped her shoulder. \"Next time,\" he said, \"I'm checking two sources too.\"",
     ].join("\n\n"),
     vocab: [
       { word: "source", meaning: "a place where information comes from" },
@@ -1988,7 +1988,7 @@ export const COLE_WRITING: WritingPrompt[] = [
     prompt:
       "Finish the same stem three ways. Write three complete sentences.\n\nStem: Pip counted every pile of acorns twice\n\n1. ... because ...\n2. ... but ...\n3. ... so ...",
     modelAnswer:
-      "Pip counted every pile of acorns twice because a hollow acorn would be useless in January. Pip counted every pile of acorns twice, but Dash laughed at her for wasting the warm days. Pip counted every pile of acorns twice, so when winter came she knew exactly how much food she had.",
+      "Pip counted every pile of acorns twice because she wanted to be sure she had stored enough food for winter. Pip counted every pile of acorns twice, but Dash laughed at her for wasting the warm days. Pip counted every pile of acorns twice, so when winter came she knew exactly how much food she had.",
     checklist: [
       "Each sentence starts with a capital and ends with a period",
       "The 'because' part gives a reason, the 'but' part gives a change or surprise, and the 'so' part gives a result",
@@ -2084,9 +2084,9 @@ export const COLE_WRITING: WritingPrompt[] = [
     skill: "Combine the Sentences",
     level: 4,
     prompt:
-      "Combine these sentences into ONE sentence. Then write it a second way, starting with a different word.\n\nMarconi set up his wireless telegraph on the hill at Twin Lights. This happened in 1899. He sent news of a yacht race to shore. He did not use any wires.",
+      "Combine these sentences into ONE sentence. Then write it a second way, starting with a different word.\n\nMarconi set up a wireless telegraph station on the hill at Twin Lights. This happened in 1899. The station received reports about a yacht race from a ship at sea. No wires connected the ship to the station.",
     modelAnswer:
-      "In 1899, Marconi set up his wireless telegraph on the hill at Twin Lights and sent news of a yacht race to shore without using any wires. Without using any wires, Marconi sent news of a yacht race to shore in 1899 from the wireless telegraph he had set up on the hill at Twin Lights.",
+      "In 1899, Marconi set up a wireless telegraph station on the hill at Twin Lights, and it received reports about a yacht race from a ship at sea without any wires. Without any wires, reports about a yacht race traveled from a ship at sea to the wireless station that Marconi set up on the hill at Twin Lights in 1899.",
     checklist: [
       "Both versions keep every important fact: who, what, where, when, and how",
       "The two versions start with different words",
@@ -2100,7 +2100,7 @@ export const COLE_WRITING: WritingPrompt[] = [
     prompt:
       "Read the details. Then write ONE topic sentence that tells what all of the details are about.\n\nDetails:\n- A basketball bounces because squeezed air inside pushes back.\n- A cold ball bounces low because the air inside pushes less.\n- Each bounce loses a little energy as sound and heat.",
     modelAnswer:
-      "The air inside a basketball explains how high it bounces.",
+      "A few simple science ideas explain how high a basketball bounces.",
     checklist: [
       "The topic sentence is about ALL the details, not just one of them",
       "It does not simply copy one of the details",
@@ -2126,7 +2126,7 @@ export const COLE_WRITING: WritingPrompt[] = [
     skill: "Topic Sentence",
     level: 4,
     prompt:
-      "Read the details. Write ONE topic sentence for the paragraph, and then write a concluding sentence that restates the idea in different words.\n\nDetails:\n- In 1841, Twin Lights was the first American lighthouse to use a Fresnel lens.\n- In 1899, Marconi sent wireless messages from the hill at Twin Lights.\n- The two towers were built in different shapes so sailors could tell the lighthouse apart in daylight.",
+      "Read the details. Write ONE topic sentence for the paragraph, and then write a concluding sentence that restates the idea in different words.\n\nDetails:\n- In 1841, Twin Lights was the first American lighthouse to use a Fresnel lens.\n- In 1899, Marconi tested a wireless telegraph station on the hill at Twin Lights.\n- The two towers were built in different shapes so sailors could tell the lighthouse apart in daylight.",
     modelAnswer:
       "Topic sentence: The Navesink Twin Lights was a place where new ideas were tried before most other lighthouses had them. Concluding sentence: Again and again, Twin Lights was ahead of its time.",
     checklist: [

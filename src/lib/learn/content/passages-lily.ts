@@ -4,11 +4,15 @@
 // word in its text is either decodable at those stages or a sight word introduced by those stages
 // (see phonics-lily.ts). A checker in the authoring session verified this for every passage.
 //
-// Allowed exceptions (verified by hand):
-// - Names used in the stories (Sam, Max, Pam, Gus, Jen, Peg, Chip, Bill, Jake, Kate, Meg, Ben, Jill,
-//   Tim, Rob, Joe, Ray, Daisy, Nancy, Lily, Cole), each used only once its letters are decodable.
+// Allowed exceptions (verified by hand; scripts/reading-check.mts re-checks every word):
+// - "Lily" and "Cole", the children's own names, are known by sight from the first passage
+//   (by the rules alone, Cole needs magic e and Lily needs y as long e).
+// - Other story names (Sam, Max, Pam, Gus, Jen, Peg, Chip, Bill, Daisy, Nancy) are used only once
+//   their letters are decodable.
 // - Plural / third-person -s on a decodable word (ducks, kicks, plays).
 // - "egg" is treated as a short-e word (see phonics-lily.ts).
+// - Irregular words that only look decodable ("says" = /sez/, "bow" = /bau/ before the ow diphthong)
+//   are not used.
 
 import type { ReadingPassage } from "./types";
 
@@ -374,7 +378,7 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p13",
     title: "Ride the Bike",
-    text: "Cole has a bike. It is red and white. Lily has a bike. It is pink. Cole and Lily ride on the path. Cole is fast. Lily is not fast yet. Cole stops. He waits. Lily rides up to him.\n\nThey ride to the lake. Then they ride home. Mom has a snack. Lily says, \"I like to ride!\" Cole smiles. \"I like to ride with you.\"",
+    text: "Cole has a bike. It is red and white. Lily has a bike. It is pink. Cole and Lily ride on the path. Cole is fast. Lily is not fast yet. Cole stops. He waits. Lily rides up to him.\n\nThey ride to the lake. Then they ride home. Mom has a snack. Lily yells, \"I like to ride!\" Cole smiles. \"I like to ride with you.\"",
     level: 1.5,
     words: 67,
     genre: "fiction",
@@ -435,9 +439,9 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p15",
     title: "Bees",
-    text: "A bee is little, but it is a big help. A bee can fly from plant to plant. It sits on a plant and sips a sweet drop. Yellow bits stick to the bee. Then the bee will fly to the other plants. The bits help the plants make seeds.\n\nBees make a home in a tree. Many bees stay in the home. Bees make a sweet treat. We eat it on toast! Do not grab a bee. It may sting. Just let it fly.",
+    text: "A bee is little, but it is a big help. A bee can fly from plant to plant. It sits on a plant and sips a sweet drop. Yellow bits stick to the bee. Then the bee will fly to the other plants. The bits help the plants make seeds.\n\nSome bees make a home in a tree. Many bees stay in the home. They make a sweet treat. We eat it on toast! Do not grab a bee. It may sting. Just let it fly.",
     level: 1.5,
-    words: 85,
+    words: 86,
     genre: "nonfiction",
     topic: "animals",
     vocab: [
@@ -467,9 +471,9 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p16",
     title: "The Pony",
-    text: "Lily went to see a pony. The pony is Daisy. Daisy is tiny and gray. She has a long tail and a soft nose. Lily gives Daisy a bit of hay. Daisy likes it. Lily uses a brush on Daisy.\n\nThen Lily gets up on Daisy. A lady takes Daisy up the trail. Daisy is slow, but Lily is happy. She is not shy. She pats Daisy. At the end, Lily gives Daisy a hug. \"I love Daisy,\" Lily says.",
+    text: "Lily went to see a pony. The pony is Daisy. Daisy is tiny and gray. She has a long tail and a soft nose. Lily gives Daisy a bit of hay. Daisy likes it. Lily uses a brush on Daisy.\n\nThen Lily gets up on Daisy. A lady takes Daisy up the trail. Daisy is slow, but Lily is happy. She is not shy. She pats Daisy. At the end, Lily gives Daisy a hug. \"I love Daisy,\" Lily tells the lady.",
     level: 1.5,
-    words: 80,
+    words: 82,
     genre: "fiction",
     topic: "animals",
     vocab: [{ word: "trail", meaning: "a path through the woods or a field" }],
@@ -496,12 +500,12 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p17",
     title: "Leap and Spin",
-    text: "Lily is in a class to leap and spin. She has on a pink dress. The class makes a row. Lily lifts one leg. She keeps it up. Then she leaps. She leaps high like a frog. She spins and spins. She does not slip.\n\nThe lady claps. \"Sweet!\" she says. Then the class takes a bow. Lily feels happy. She will leap and spin all week.",
+    text: "Lily is in a class to leap and spin. She has on a pink dress. The class makes a row. Lily lifts one leg. She keeps it up. Then she leaps. She leaps high like a frog. She spins and spins. She does not slip.\n\nThe lady claps. \"Sweet!\" she cheers. Then the class bends low to say thanks. Lily feels happy. She will leap and spin all week.",
     level: 1.5,
-    words: 67,
+    words: 69,
     genre: "fiction",
     topic: "arts",
-    vocab: [{ word: "bow", meaning: "to bend forward to say thank you after a dance" }],
+    vocab: [{ word: "leap", meaning: "a big jump" }],
     questions: [
       {
         prompt: "What does Lily have on?",
@@ -515,7 +519,7 @@ export const LILY_PASSAGES: ReadingPassage[] = [
         prompt: "What is this story mostly about?",
         options: ["Lily leaping and spinning in dance class", "a frog in a pond", "a lady who claps"],
         answerIndex: 0,
-        explain: "Almost every sentence tells what Lily does in her dance class: lift, leap, spin, bow.",
+        explain: "Almost every sentence tells what Lily does in her dance class: lift, leap, spin, bend.",
         hint: "Look at the title.",
         kind: "main-idea",
       },
@@ -554,7 +558,7 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p19",
     title: "The Kite",
-    text: "It is a windy day. Lily has a kite. It is red with a long tail. Dad helps. Lily runs. Up, up, up! The kite is up in the sky! It dips. It sways. It is so high. Lily keeps the rope tight.\n\nThen the kite dips low. Lily runs fast. The kite is back up. It is a bright spot in the sky. Dad says, \"That is the way!\" Lily grins. She loves the kite.",
+    text: "It is a windy day. Lily has a kite. It is red with a long tail. Dad helps. Lily runs. Up, up, up! The kite is up in the sky! It dips. It sways. It is so high. Lily keeps the string tight.\n\nThen the kite dips low. Lily runs fast. The kite is back up. It is a bright spot in the sky. Dad cheers, \"That is the way!\" Lily grins. She loves the kite.",
     level: 1.5,
     words: 76,
     genre: "fiction",
@@ -583,9 +587,9 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p20",
     title: "The Seeds",
-    text: "Lily has a pail of seeds. She and Mom dig little holes in a sunny spot. Lily drops a seed in each hole. Then she pats it flat. She gives the seeds water. Each day she looks. No plants yet. Day by day she waits.\n\nThen one day, she sees a green stem! The seeds grow and grow. By the end of the week, the plants are high. Then she sees a bud. The bud opens. It is a yellow tulip! Lily did it.",
+    text: "Lily has a pail of seeds. She and Mom dig little holes in a sunny spot. Lily drops a seed in each hole. Then she pats it flat. She gives the seeds water. Each day she looks. No plants yet. Day by day she waits.\n\nThen one day, she sees a green stem! The seeds grow and grow. Week by week, the stems get long. Then she sees a bud. The bud opens. It is a yellow poppy! Lily did it.",
     level: 1.5,
-    words: 84,
+    words: 81,
     genre: "fiction",
     topic: "science",
     vocab: [
@@ -595,9 +599,9 @@ export const LILY_PASSAGES: ReadingPassage[] = [
     questions: [
       {
         prompt: "What was the bud?",
-        options: ["a yellow tulip", "a red rose", "a green bean"],
+        options: ["a yellow poppy", "a red rose", "a green bean"],
         answerIndex: 0,
-        explain: "The story says: The bud opens. It is a yellow tulip!",
+        explain: "The story says: The bud opens. It is a yellow poppy!",
         hint: "Read the end of the story.",
         kind: "detail",
       },
@@ -673,9 +677,9 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p23",
     title: "The Garden",
-    text: "Lily and Mom have a garden in the yard. In March, they dig in the dirt and plant seeds. Lily waters the plants every morning. She pulls out the weeds. She keeps the soil wet.\n\nBy summer, the garden has corn, beans and tulips. A bird comes to eat the seeds. A rabbit comes to eat the beans! Lily shouts, and the rabbit hops away. Mom laughs. At dinner, they eat corn from the garden. It is sweet. \"You are a smart farmer,\" Dad says.",
+    text: "Lily and Mom have a garden in the yard. In May, they dig in the dirt and plant seeds. Lily waters the plants every morning. She pulls out the weeds. She keeps the soil wet.\n\nBy summer, the garden has corn, beans and sunflowers. A bird comes to eat the sunflower seeds. A rabbit comes to eat the beans! Lily shouts, and the rabbit hops away. Mom laughs. At dinner, they eat corn from the garden. It is sweet. \"You are a smart farmer,\" Dad tells her.",
     level: 2,
-    words: 85,
+    words: 87,
     genre: "fiction",
     topic: "science",
     vocab: [
@@ -695,7 +699,7 @@ export const LILY_PASSAGES: ReadingPassage[] = [
         prompt: "What do Lily and Mom do first in the garden?",
         options: ["They dig and plant seeds.", "They eat corn.", "They pull weeds."],
         answerIndex: 0,
-        explain: "In March they dig in the dirt and plant seeds. Watering, weeding and eating the corn come later.",
+        explain: "In May they dig in the dirt and plant seeds. Watering, weeding and eating the corn come later.",
         hint: "Read the second sentence.",
         kind: "sequence",
       },
@@ -737,21 +741,21 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p25",
     title: "The Lemonade Stand",
-    text: "It is a hot summer day. Lily and Cole make a lemonade stand. They cut lemons. They stir in water and mix it until it is sweet. Cole paints a big card: Lemonade, one coin a cup. Lily sets out the cups.\n\nA man walks by. He gets a cup. A girl on a bike stops. She gets a cup. Then Dad gets four cups! At the end of the day, the jar has many coins. Lily counts them. Forty cents! Cole says, \"That was hard work.\" Lily grins. \"It was sweet work!\"",
+    text: "It is a hot summer day. Lily and Cole make a lemonade stand. They cut lemons. They stir in water and something sweet, and they mix it until it is just right. Cole paints a big card: Lemonade, ten cents a cup. Lily sets out the cups.\n\nA man walks by. He gets a cup. A girl on a bike stops. She gets a cup. Then Dad gets two cups! At the end of the day, Lily counts the coins in the jar. Forty cents! Cole groans, \"That was hard work.\" Lily grins. \"It was sweet work!\"",
     level: 2,
-    words: 93,
+    words: 97,
     genre: "fiction",
     topic: "family",
     vocab: [
       { word: "stand", meaning: "a little table where you sell things" },
-      { word: "cents", meaning: "pennies; one hundred cents make a dollar" },
+      { word: "cents", meaning: "small bits of money; a penny is one cent, and one hundred cents make a dollar" },
     ],
     questions: [
       {
         prompt: "How much is a cup of lemonade?",
-        options: ["one coin", "four coins", "forty coins"],
+        options: ["ten cents", "two cents", "forty cents"],
         answerIndex: 0,
-        explain: "The card Cole paints says: Lemonade, one coin a cup.",
+        explain: "The card Cole paints says: Lemonade, ten cents a cup. Four cups at ten cents each make the forty cents Lily counts.",
         hint: "Read what is on the card.",
         kind: "detail",
       },
@@ -802,7 +806,7 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p27",
     title: "Soccer Star",
-    text: "Lily plays soccer on a team. Her shirt is yellow. The coach says, \"Go, go, go!\" Lily runs down the green grass. A girl kicks the ball to her. Lily stops it. She runs with the ball. A big kid runs at her. Lily turns. She kicks the ball hard. It goes into the net. Goal!\n\nThe team cheers. Lily jumps up. Her brother Cole shouts, \"That is my sister!\" After the game, the team gets orange slices. Lily eats three. She is a soccer star.",
+    text: "Lily plays soccer on a team. Her shirt is yellow. The coach yells, \"Go, go, go!\" Lily runs down the green grass. A girl kicks the ball to her. Lily stops it. She runs with the ball. A big kid runs at her. Lily turns. She kicks the ball hard. It goes into the net. Goal!\n\nThe team cheers. Lily jumps up. Her brother Cole shouts, \"That is my sister!\" After the game, the team gets orange slices. Lily eats three. She is a soccer star.",
     level: 2,
     words: 86,
     genre: "fiction",
@@ -898,9 +902,9 @@ export const LILY_PASSAGES: ReadingPassage[] = [
   {
     id: "lily-p30",
     title: "Go Team Go",
-    text: "Lily is on a cheer team. The team has red and white uniforms. They cheer at the games. Lily claps and jumps and shouts. She lifts her arms high. She kicks high. Then the team lifts Lily up. Lily is at the top! She is brave. She smiles and shouts, \"Go, team, go!\" The people cheer back.\n\nAfter the game, Cole says, \"You were so loud!\" Lily laughs. \"That is the point,\" she says. \"Cheering is loud work.\"",
+    text: "Lily is on a cheer team. The team has red and white uniforms. They cheer at the games. Lily claps and jumps and shouts. She lifts her arms high. She kicks high. Then the team lifts Lily up. Lily is at the top! She is brave. She smiles and shouts, \"Go, team, go!\" The people cheer back.\n\nAfter the game, Cole tells her, \"You were so loud!\" Lily laughs. \"That is the point,\" she tells him. \"Cheering is loud work.\"",
     level: 2,
-    words: 78,
+    words: 80,
     genre: "fiction",
     topic: "sports",
     vocab: [

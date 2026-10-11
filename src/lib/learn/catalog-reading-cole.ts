@@ -33,7 +33,7 @@ export const COLE_READING_SKILLS: Skill[] = [
     intro: [
       "The main idea is what the whole passage is mostly about. Details are the small pieces that prove it.",
       "Test an answer by asking: does every paragraph fit under it? If only one paragraph fits, it is a detail, not the main idea.",
-      "Example: in 'Why Leaves Change Color', every paragraph is about the green fading to show the other colors, so that is the main idea; sugar maples are a detail.",
+      "Example: in 'Why Leaves Change Color', most of the passage explains how the green fades to show colors that were there all along, so that is the main idea; sugar maples are a detail.",
     ],
   },
   {
@@ -274,7 +274,7 @@ export const COLE_READING_SKILLS: Skill[] = [
     intro: [
       "Because gives a reason, but gives a change or surprise, and so gives a result. Finishing one stem three ways shows you understood the text.",
       "An appositive is a group of words set off by commas that renames a noun: 'Biscuit, a muddy brown dog, was asleep.'",
-      "Example: 'Pip counted twice because a hollow acorn would be useless in January.'",
+      "Example: 'Pip counted every pile twice because she wanted to be sure she had stored enough food for winter.'",
     ],
   },
 
@@ -296,7 +296,7 @@ export const COLE_READING_SKILLS: Skill[] = [
     intro: [
       "A topic sentence tells what all the details have in common; a summary says what the passage is about in one sentence and gives the key reason in another.",
       "Leave out small details and keep the big idea and the strongest evidence. Use the passage's own precise facts.",
-      "Example: 'The Pony Express used relays of riders to carry mail 2,000 miles in ten days. It closed in 1861 because the telegraph could send a message in minutes.'",
+      "Example: 'The Pony Express used relays of riders to carry mail nearly 2,000 miles in about ten days. It closed in 1861 because the telegraph could send a message in minutes.'",
     ],
   },
 ];

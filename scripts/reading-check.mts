@@ -3,7 +3,11 @@
  *
  * Plain Node 22+ (type stripping) with the resolve hook from
  * ./ts-resolve-hooks.mjs, like learn-selfcheck.mts. Checks the content tables
- * (vocab sentences, evidence needles, order entries), then every generator in
+ * (vocab sentences, evidence needles, order entries and their in-order text
+ * anchors), content-audit guards (authored question shape, word counts, vocab
+ * context and confusable distractor meanings, fragment / combine / punctuation
+ * bank shape, known factual errors that must not come back), every word of
+ * Lily's decodable passages against their phonics stages, then every generator in
  * generators/reading.ts and generators/writing.ts × 300 seeds × levels
  * 3 / 3.5 / 4: prompt, options, answerIndex validity and spread, explain/hint,
  * passage present and identical to the content text, the correct option
@@ -24,6 +28,8 @@ const contentMod = await import("../src/lib/learn/content/passages-cole");
 const rngMod = await import("../src/lib/learn/rng");
 const catalogMod = await import("../src/lib/learn/catalog-reading-cole");
 const gradeMod = await import("../src/lib/learn/grade");
+const lilyMod = await import("../src/lib/learn/content/passages-lily");
+const phonicsContentMod = await import("../src/lib/learn/content/phonics-lily");
 
 const { generators: reading, EVIDENCE, ORDER, splitSentences, findVocabSentence, passageSetForSeed } = readingMod;
 const { generators: writing, SKILL_LABEL, FRAGMENT_ITEMS, COMBINE_ITEMS, PUNCT_ITEMS } = writingMod;
@@ -31,6 +37,8 @@ const { COLE_PASSAGES, COLE_WRITING } = contentMod;
 const { mulberry32, hashString } = rngMod;
 const { COLE_READING_SKILLS } = catalogMod;
 const { gradeAnswer } = gradeMod;
+const { LILY_PASSAGES } = lilyMod;
+const { PHONICS_STAGES } = phonicsContentMod;
 
 const N = 300;
 const LEVELS = [3, 3.5, 4];
@@ -102,6 +110,13 @@ const byId = new Map<string, ReadingPassage>(COLE_PASSAGES.map((p) => [p.id, p])
     orIds.add(o.id);
     assert(!!byId.get(o.id), where, "unknown passage id");
     assert(o.events.length === 3 && new Set(o.events).size === 3 && o.events.every((x) => x.length > 5), where, "needs 3 distinct events");
+    const p = byId.get(o.id);
+    if (!p) continue;
+    // each event is anchored to exactly one spot in the text, and the anchors run in the authored order
+    assert(o.anchors.length === 3, where, "needs 3 anchors");
+    const pos = o.anchors.map((a) => p.text.indexOf(a));
+    o.anchors.forEach((a, i) => assert(pos[i] >= 0 && p.text.indexOf(a, pos[i] + 1) < 0, where, `anchor "${a}" must occur exactly once in the passage`));
+    assert(pos[0] < pos[1] && pos[1] < pos[2], where, `anchors are not in passage order (${pos.join(", ")})`);
   }
   for (const L of LEVELS) {
     const at = COLE_PASSAGES.filter((p) => p.level === L);
@@ -109,6 +124,299 @@ const byId = new Map<string, ReadingPassage>(COLE_PASSAGES.map((p) => [p.id, p])
     const sq = at.filter((p) => orIds.has(p.id) || p.questions.some((q) => q.kind === "sequence")).length;
     console.log(`level ${L}: ${at.length} passages, evidence entries ${ev}, sequence-capable ${sq}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Content audit guards (each one pins a problem found when the content was reviewed)
+// ---------------------------------------------------------------------------
+
+{
+  const allPassages: ReadingPassage[] = [...COLE_PASSAGES, ...LILY_PASSAGES];
+  for (const p of allPassages) {
+    const where = `content ${p.id}`;
+    // authored questions: the right number of distinct options and one answer in range
+    const optionCount = p.id.startsWith("cole-") ? 4 : 3;
+    for (const [qi, q] of p.questions.entries()) {
+      assert(q.options.length === optionCount, where, `question ${qi} has ${q.options.length} options, expected ${optionCount}`);
+      assert(new Set(q.options.map(lower)).size === q.options.length, where, `question ${qi} repeats an option`);
+      assert(Number.isInteger(q.answerIndex) && q.answerIndex >= 0 && q.answerIndex < q.options.length, where, `question ${qi} answerIndex out of range`);
+    }
+    // declared word count stays close to the text
+    const actual = p.text.split(/\s+/).filter(Boolean).length;
+    assert(Math.abs(actual - p.words) <= Math.max(3, actual * 0.1), where, `words says ${p.words}, text has ${actual}`);
+  }
+
+  // rd.vocabContext quotes the first sentence that uses the word: it needs enough context,
+  // unless the passage's own vocabulary question teaches the word ("I observed." alone does not)
+  for (const p of COLE_PASSAGES) {
+    const sentences = splitSentences(p.text);
+    for (const v of p.vocab) {
+      const hit = findVocabSentence(sentences, v.word);
+      if (!hit) continue;
+      const n = sentences[hit.index].split(/\s+/).filter(Boolean).length;
+      const taught = p.questions.some((q) => q.kind === "vocabulary" && lower(q.prompt).includes(lower(v.word).slice(0, 5)));
+      assert(n >= 4 || taught, `vocab ${p.id}`, `"${v.word}" is first used in a ${n}-word sentence: "${sentences[hit.index]}"`);
+    }
+  }
+
+  // meanings that also read sensibly in the other word's sentence are never offered together
+  const CONFUSABLE: readonly (readonly [string, string])[] = [
+    ["faded", "pale"], ["sediment", "particles"], ["settled", "concluded"], ["admitted", "announced"], ["defender", "opposing"],
+    ["satisfied", "certain"], ["certain", "exact"], ["flock", "clustering"], ["wireless", "telegraph"], ["merchants", "economists"],
+    ["estimate", "prediction"], ["observe", "evidence"], ["observation", "evidence"], ["remarkable", "unusual"], ["fastener", "joint"],
+    ["pattern", "cycle"], ["pattern", "routine"], ["cycle", "routine"], ["consistent", "pattern"],
+  ];
+  const meanings = new Map<string, string[]>();
+  for (const p of COLE_PASSAGES) for (const v of p.vocab) meanings.set(lower(v.word), [...(meanings.get(lower(v.word)) ?? []), lower(v.meaning)]);
+  let confusableChecks = 0;
+  for (const p of COLE_PASSAGES) {
+    for (const v of p.vocab) {
+      const w = lower(v.word);
+      const partners = CONFUSABLE.filter(([a, b]) => a === w || b === w).map(([a, b]) => (a === w ? b : a));
+      const banned = new Set(partners.flatMap((x) => meanings.get(x) ?? []));
+      if (banned.size === 0) continue;
+      for (let i = 0; i < 25; i++) {
+        const q = run(reading["rd.vocabContext"], hashString(`confusable:${p.id}:${w}:${i}`), { passageId: p.id, word: v.word });
+        if (q.type !== "choice") continue;
+        confusableChecks += 1;
+        for (const o of q.options) assert(!banned.has(lower(o.label ?? "")), `vocab ${p.id}`, `"${v.word}" offered the meaning of a confusable word: "${o.label}"`);
+      }
+    }
+  }
+
+  // fragments: a subject-less fragment must not read as a command ("Set up a station." is a sentence)
+  const IRREGULAR_PAST = new Set(["flew", "sent", "wrote", "ran", "swam", "dove", "threw", "took", "gave", "made", "held", "kept", "built", "caught", "found", "saw", "came", "went", "told", "began", "drew", "grew", "rode", "sang", "stood", "struck", "won"]);
+  const OPENERS = /^(because|when|after|although|if|while|since|before|until)\b/i;
+  for (const [i, it] of FRAGMENT_ITEMS.entries()) {
+    const where = `FRAGMENT_ITEMS[${i}]`;
+    const first = lower(it.text.split(/\s+/)[0].replace(/[^A-Za-z]/g, ""));
+    assert(/^[A-Z]/.test(it.text) && it.text.endsWith("."), where, "item must start with a capital and end with a period");
+    if (it.kind === "no-subject") {
+      assert(first === lower(it.verb ?? ""), where, `a no-subject fragment must start with its verb "${it.verb}"`);
+      assert(/(ed|[^s]s)$/.test(first) || IRREGULAR_PAST.has(first), where, `"${first}" could be read as a command, which makes a complete sentence`);
+    }
+    if (it.kind === "unfinished") assert(first === lower(it.opener ?? ""), where, `an unfinished fragment must start with its opener "${it.opener}"`);
+    if (it.kind === "sentence" && OPENERS.test(it.text)) assert(it.text.includes(",") && !!it.note, where, "a sentence that starts with an opener needs its main clause after a comma and a note");
+    if (it.kind !== "sentence") assert(!!it.fix && /^[A-Z]/.test(it.fix) && it.fix.endsWith(".") && (!OPENERS.test(it.fix) || it.fix.includes(",")), where, "fix must be one complete sentence");
+  }
+
+  // combine: wrong[0] is the parts run together, wrong[1] the same words with commas only, and the key uses a joining word
+  const letters = (s: string) => s.replace(/[^A-Za-z]/g, "").toLowerCase();
+  const wordCount = (s: string) => s.split(/\s+/).filter(Boolean).length;
+  const JOIN = /\b(because|but|so|and|when|although|until|after|even though|if|while)\b/i;
+  for (const [i, c] of COMBINE_ITEMS.entries()) {
+    const where = `COMBINE_ITEMS[${i}]`;
+    assert(JOIN.test(c.correct), where, "the key has no joining word");
+    assert(!c.wrong[0].includes(",") && letters(c.wrong[0]) === letters(c.parts.join(" ")), where, `wrong[0] should be the parts run together: ${c.wrong[0]}`);
+    assert(c.wrong[1].includes(",") && wordCount(c.wrong[1]) === wordCount(c.wrong[0]), where, `wrong[1] should be the same sentences joined by commas only: ${c.wrong[1]}`);
+  }
+
+  // punctuation: options differ only in punctuation, never in the words
+  for (const [i, it] of PUNCT_ITEMS.entries()) for (const w of it.wrong) assert(letters(w) === letters(it.correct), `PUNCT_ITEMS[${i}]`, `distractor changes the words, not just the punctuation: ${w}`);
+
+  // factual and logic errors found in review must not come back
+  const coleCorpus = [
+    ...COLE_PASSAGES.flatMap((p) => [p.text, ...p.vocab.map((v) => v.meaning), ...p.questions.flatMap((q) => [q.prompt, ...q.options, q.explain, q.hint])]),
+    ...COLE_WRITING.flatMap((w) => [w.prompt, w.modelAnswer]),
+    ...FRAGMENT_ITEMS.flatMap((x) => [x.text, x.fix ?? ""]),
+    ...COMBINE_ITEMS.flatMap((x) => [...x.parts, x.correct, ...x.wrong]),
+    ...PUNCT_ITEMS.flatMap((x) => [x.correct, ...x.wrong]),
+    ...COLE_READING_SKILLS.flatMap((s) => s.intro ?? []),
+  ].join("\n");
+  const FACTS: readonly { re: RegExp; why: string }[] = [
+    { re: /sweet potatoes did the opposite/i, why: "sweet potatoes do not put nutrients back into the soil (peanuts, a legume, do)" },
+    { re: /underground rivers/i, why: "groundwater fills spaces in soil and rock; it is not underground rivers" },
+    { re: /around South America/i, why: "1860 mail went by stagecoach or by ship via Panama" },
+    { re: /stop growing and save/i, why: "adult butterflies never grow; the fall monarchs put off laying eggs" },
+    { re: /fan-shaped land at the mouth of the Mississippi|delta, and it is still growing/i, why: "the Mississippi delta is bird's-foot shaped and losing land overall" },
+    { re: /Galileo saw stripes/i, why: "Galileo's 1610 telescope could not show Jupiter's belts or the Great Red Spot" },
+    { re: /At the northern tip of Sandy Hook/i, why: "the lighthouse is now about a mile and a half from the tip (paragraph 3)" },
+    { re: /Marconi sent news|news of (a|the) yacht race (to shore|from the hill)/i, why: "the reports went from a ship at sea to Marconi's station on the hill" },
+    { re: /four locked pockets/i, why: "not every mochila pocket was locked" },
+    { re: /far more air into it/i, why: "a basketball holds only about one and a half times normal air pressure" },
+    { re: /Some pins are lifted too far/i, why: "with one pin per hole, a pin lifted too far would not block the plug" },
+    { re: /the other team's number nine/i, why: "the opponent changes every game; name the team whose number nine took eleven shots" },
+    { re: /exactly as the loop had suggested/i, why: "the passage never says when the radar showed the rain ending" },
+  ];
+  for (const f of FACTS) assert(!f.re.test(coleCorpus), "facts (Cole)", `${f.re}: ${f.why}`);
+  for (const p of LILY_PASSAGES) {
+    assert(!(/\btulips?\b/i.test(p.text) && /\bseeds?\b/i.test(p.text)), `facts ${p.id}`, "tulips grow from bulbs, not seeds");
+    assert(!/\bin March\b[^.]*plant seeds/i.test(p.text), `facts ${p.id}`, "corn and beans are not planted in March in New Jersey");
+    assert(!/stir in water and mix it until it is sweet/i.test(p.text), `facts ${p.id}`, "water does not make lemonade sweet");
+  }
+  console.log(`audit: ${allPassages.length} passages, ${confusableChecks} confusable-vocab items, ${FRAGMENT_ITEMS.length + COMBINE_ITEMS.length + PUNCT_ITEMS.length} bank items, ${FACTS.length} fact pins`);
+}
+
+// ---------------------------------------------------------------------------
+// Lily's decodable passages: every word is decodable at the passage's own phonicsStages
+// ---------------------------------------------------------------------------
+
+{
+  const stages = PHONICS_STAGES.slice().sort((a, b) => a.order - b.order);
+  const orderOf = new Map(stages.map((s) => [s.id, s.order] as const));
+  const NEVER = 99;
+  const st = (id: string): number => orderOf.get(id) ?? NEVER;
+  const S = {
+    a: st("cvc-a"), i: st("cvc-i"), o: st("cvc-o"), u: st("cvc-u"), e: st("cvc-e"),
+    digraph: st("digraphs"), floss: st("floss"), blendStart: st("blends-beginning"), blendEnd: st("blends-ending"),
+    magicA: st("magic-e-a"), magicOther: st("magic-e-i-o-u-e"), syllable: st("open-closed-syllables"),
+    aiay: st("vowel-team-ai-ay"), eeea: st("vowel-team-ee-ea"), oaow: st("vowel-team-oa-ow-oe"), ighY: st("long-i-igh-y"),
+    ar: st("r-controlled-ar"), or: st("r-controlled-or"), erirur: st("r-controlled-er-ir-ur"),
+    diphthong: st("diphthongs"), soft: st("soft-c-g"), suffix: st("suffixes-ed-ing"),
+  };
+  assert(Object.values(S).every((n) => n < NEVER), "decodable: stages", "phonics-lily.ts stage ids changed; update the decodability check");
+  const listed = new Map<string, number>();
+  const sight = new Map<string, number>();
+  for (const s of stages) {
+    for (const w of s.words) if (!listed.has(w.word.toLowerCase())) listed.set(w.word.toLowerCase(), s.order);
+    for (const w of s.sightWords) if (!sight.has(w.toLowerCase())) sight.set(w.toLowerCase(), s.order);
+  }
+  const known = (w: string): number | undefined => sight.get(w) ?? listed.get(w);
+  /** The children's own names, known by sight from the first passage (see the passages-lily.ts header). */
+  const OWN_NAMES = new Set(["lily", "cole"]);
+  /** Words whose spelling looks decodable but whose sound breaks the patterns; usable only as listed sight words. */
+  const IRREGULAR = new Set([
+    "says", "push", "full", "bull", "bush", "sugar", "father", "both", "most", "post", "host", "ghost", "son", "won", "ton",
+    "front", "month", "mother", "glove", "dove", "above", "oven", "none", "move", "lose", "whose", "live", "been", "pretty",
+    "busy", "eye", "floor", "poor", "learn", "heard", "earth", "early", "earn", "search", "pearl", "bear", "pear", "wear",
+    "swear", "head", "bread", "dead", "deaf", "ready", "heavy", "breath", "sweater", "weather", "feather", "leather",
+    "instead", "spread", "thread", "meant", "health", "breakfast", "measure", "treasure", "steady", "break", "steak",
+    "pint", "climb", "only", "any", "many", "very", "pull", "put", "of", "to", "do", "who", "two",
+  ]);
+  /** Final -ow is long o except in these. */
+  const OW_DIPHTHONG_FINAL = new Set(["how", "now", "cow", "wow", "bow", "vow", "plow", "chow", "allow", "brow", "sow"]);
+  const RULES: { re: RegExp; why: string }[] = [
+    { re: /^(kn|wr|gn)|mb$/, why: "silent letter" },
+    { re: /[^aeiou]le$/, why: "consonant-le syllable is not in the scope" },
+    { re: /(old|olt|ild|ind)$/, why: "long vowel in a closed syllable" },
+    { re: /(all|alk|alt|ald)$/, why: "a = /aw/" },
+    { re: /^s?wa(s|sh|tch|nd|nt|ll|lk|lt|r)|^wor/, why: "w changes the vowel" },
+    { re: /(are|ire|ure|ere)$/, why: "r-controlled vowel + e is not in the scope" },
+    { re: /ear[^aeiouy]/, why: "ear = /er/" },
+  ];
+  type Unit = { g: string; stage: number; vowel: boolean };
+  const GRAPHEMES: [string, number, boolean][] = [
+    ["igh", S.ighY, true], ["dge", S.soft, false], ["tch", NEVER, false], ["ore", S.or, true],
+    ["ai", S.aiay, true], ["ay", S.aiay, true], ["ee", S.eeea, true], ["ea", S.eeea, true], ["oa", S.oaow, true], ["oe", S.oaow, true],
+    ["ow", S.oaow, true], ["ou", S.diphthong, true], ["oi", S.diphthong, true], ["oy", S.diphthong, true], ["au", S.diphthong, true],
+    ["aw", S.diphthong, true], ["ew", NEVER, true], ["ar", S.ar, true], ["or", S.or, true], ["er", S.erirur, true], ["ir", S.erirur, true],
+    ["ur", S.erirur, true], ["sh", S.digraph, false], ["ch", S.digraph, false], ["th", S.digraph, false], ["wh", S.digraph, false],
+    ["ck", S.digraph, false], ["ng", S.blendEnd, false], ["nk", S.blendEnd, false], ["ff", S.floss, false], ["ll", S.floss, false],
+    ["ss", S.floss, false], ["zz", S.floss, false], ["ph", NEVER, false], ["gh", NEVER, false], ["qu", NEVER, false],
+  ];
+  const SHORT: Record<string, number> = { a: S.a, i: S.i, o: S.o, u: S.u, e: S.e };
+  const SUFFIXES = /(es|s|ed|ing)$/;
+
+  /** Stage needed to decode a bare word (no suffix handling); NEVER when it cannot be decoded. */
+  function bareStage(w: string): { stage: number; why: string } {
+    const k = known(w);
+    if (k !== undefined) return { stage: k, why: sight.has(w) ? "sight word" : "stage word" };
+    if (IRREGULAR.has(w)) return { stage: NEVER, why: "irregular" };
+    for (const r of RULES) if (r.re.test(w)) return { stage: NEVER, why: r.why };
+    const units: Unit[] = [];
+    for (let i = 0; i < w.length; ) {
+      const g = GRAPHEMES.find(([x]) => w.startsWith(x, i));
+      if (g) {
+        let stage = g[1];
+        if (g[0] === "ow") {
+          const base = w.replace(SUFFIXES, "");
+          stage = base.endsWith("ow") && !OW_DIPHTHONG_FINAL.has(base) ? S.oaow : S.diphthong;
+        }
+        units.push({ g: g[0], stage, vowel: g[2] });
+        i += g[0].length;
+        continue;
+      }
+      const c = w[i];
+      if (c in SHORT) units.push({ g: c, stage: SHORT[c], vowel: true });
+      else if (c === "y") units.push({ g: c, stage: i === 0 ? S.a : i === w.length - 1 ? S.ighY : NEVER, vowel: i !== 0 });
+      else if (/[b-df-hj-np-tv-xz]/.test(c)) units.push({ g: c, stage: c === "q" ? NEVER : S.a, vowel: false });
+      else return { stage: NEVER, why: `character "${c}"` };
+      i += 1;
+    }
+    const why: string[] = [];
+    let stage = S.a;
+    const need = (n: number, reason: string) => {
+      if (n > stage) {
+        stage = n;
+        why.push(reason);
+      }
+    };
+    const n = units.length;
+    let body = units;
+    if (n >= 3 && units[n - 1].g === "e" && !units[n - 2].vowel && units[n - 3].vowel && units[n - 3].g.length === 1 && units[n - 3].g !== "y") {
+      need(units[n - 3].g === "a" ? S.magicA : S.magicOther, `magic e (${units[n - 3].g}_e)`);
+      if (units[n - 2].g === "c" || units[n - 2].g === "g") need(S.soft, "soft c/g");
+      body = units.slice(0, n - 1).map((x, j) => (j === n - 3 ? { ...x, stage: 0 } : x));
+    } else if (w.endsWith("ge")) need(S.soft, "soft g");
+    body.forEach((x, j) => {
+      need(x.stage, x.g);
+      if (x.g === "c" && j + 1 < body.length && /^[eiy]/.test(body[j + 1].g)) need(S.soft, "soft c");
+      const prev = body[j - 1];
+      if (j > 0 && x.vowel && prev.vowel && (/^[aeiouy]$/.test(x.g) || /^[aeiouy]$/.test(prev.g))) need(NEVER, `vowel pair ${prev.g}${x.g}`);
+    });
+    const vowels = body.filter((x) => x.vowel).length;
+    if (vowels === 0) need(NEVER, "no vowel");
+    if (vowels >= 2) need(S.syllable, "two syllables");
+    const last = body[body.length - 1];
+    if (body === units && last.vowel && /^[aeiou]$/.test(last.g)) need(S.syllable, "open syllable");
+    let lead = 0;
+    while (lead < body.length && !body[lead].vowel) lead++;
+    if (lead >= 2) need(S.blendStart, "beginning blend");
+    let tail = 0;
+    while (tail < body.length && !body[body.length - 1 - tail].vowel) tail++;
+    if (tail >= 2) need(S.blendEnd, "ending blend");
+    return { stage, why: why.join(", ") || "short vowel" };
+  }
+
+  /** Stage needed for a word as written: bare, plural / third-person -s, -ed / -ing, or a compound of two known words. */
+  function wordStage(raw: string): { stage: number; why: string } {
+    const w = raw.toLowerCase().replace(/'s$/, "");
+    if (OWN_NAMES.has(w)) return { stage: 0, why: "own name" };
+    let best = bareStage(w);
+    const consider = (stage: number, why: string) => {
+      if (stage < best.stage) best = { stage, why };
+    };
+    if (known(w) === undefined && !IRREGULAR.has(w)) {
+      if (/[^s]s$/.test(w)) consider(bareStage(w.slice(0, -1)).stage, `-s on "${w.slice(0, -1)}"`);
+      if (/(s|x|z|sh|ch)es$/.test(w)) consider(bareStage(w.slice(0, -2)).stage, `-es on "${w.slice(0, -2)}"`);
+      if (w.endsWith("ies")) consider(Math.max(S.ighY, bareStage(`${w.slice(0, -3)}y`).stage), `-ies on "${w.slice(0, -3)}y"`);
+      const m = /^(.+?)(ed|ing)$/.exec(w);
+      if (m) {
+        const s = m[1];
+        const stems = [s, `${s}e`, ...(s.length > 2 && s[s.length - 1] === s[s.length - 2] ? [s.slice(0, -1)] : [])];
+        const ok = stems.map((x) => ({ x, r: bareStage(x) })).filter(({ x, r }) => /[aeiouy]/.test(x) && r.stage < NEVER && (known(x) !== undefined || !r.why.includes("open syllable")));
+        if (ok.length > 0) best = { stage: Math.max(S.suffix, Math.min(...ok.map((o) => o.r.stage))), why: `-${m[2]} on "${ok[0].x}"` };
+      }
+      for (let i = 2; i <= w.length - 2; i++) {
+        const left = known(w.slice(0, i));
+        const right = bareStage(w.slice(i));
+        if (left !== undefined && w.length - i >= 2 && right.stage < NEVER) consider(Math.max(left, right.stage, S.syllable), `compound ${w.slice(0, i)}+${w.slice(i)}`);
+      }
+    }
+    return best;
+  }
+
+  /** Phrases whose meaning needs a later stage than the word's spelling suggests. */
+  const PHRASES: { re: RegExp; stage: number; why: string }[] = [
+    { re: /\b(take|takes|took|taking) a bow\b/i, stage: S.diphthong, why: "bow = /bau/ (bend) needs the ow diphthong" },
+  ];
+
+  const stageIds = stages.map((s) => s.id);
+  let wordsChecked = 0;
+  for (const p of LILY_PASSAGES) {
+    const where = `decodable ${p.id}`;
+    const ids = p.phonicsStages ?? [];
+    const max = Math.max(0, ...ids.map((id) => orderOf.get(id) ?? NEVER));
+    assert(ids.length > 0 && max < NEVER, where, `phonicsStages missing or unknown: ${ids.join(",")}`);
+    assert(ids.join(",") === stageIds.slice(0, max).join(","), where, `phonicsStages must be the cumulative stages 1..${max}`);
+    for (const word of p.text.match(/[A-Za-z]+(?:'[A-Za-z]+)?/g) ?? []) {
+      wordsChecked += 1;
+      const r = wordStage(word);
+      assert(r.stage <= max, where, `"${word}" needs stage ${r.stage >= NEVER ? "(not decodable)" : r.stage} (${r.why}); passage is gated at ${max}`);
+    }
+    for (const ph of PHRASES) assert(!(ph.re.test(p.text) && ph.stage > max), where, `${ph.why}; passage is gated at ${max}`);
+  }
+  console.log(`decodable: ${LILY_PASSAGES.length} Lily passages, ${wordsChecked} words checked against their phonics stages`);
 }
 
 // ---------------------------------------------------------------------------
