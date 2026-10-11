@@ -1,7 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import { loadLearnersServer, loadProgressServer, loadRecentSessionsServer, loadXpTotalServer } from "@/lib/learn/server";
-import { todayInFamilyTz } from "@/lib/learn/dates";
+import {
+  loadLearnersServer,
+  loadLedgerTotalsServer,
+  loadNotesServer,
+  loadProgressServer,
+  loadRecentSessionsServer,
+  loadRewardItemsServer,
+} from "@/lib/learn/server";
+import { addDaysToDateStr, todayInFamilyTz } from "@/lib/learn/dates";
+import { kidSlugForEmail } from "@/lib/learn/stats";
 import { coachEnabled } from "@/lib/learn/coach";
 import ParentView, { type ParentKid } from "./parent-view";
 
@@ -17,16 +25,22 @@ export default async function ParentPage() {
     redirect("/login");
   }
 
+  // Parent screens are hidden from kid logins.
+  const kidSlug = kidSlugForEmail(user.email);
+  if (kidSlug) redirect(`/learn/${kidSlug}`);
+
   const today = todayInFamilyTz();
   const learners = await loadLearnersServer();
   const kids: ParentKid[] = await Promise.all(
     learners.map(async (learner) => {
-      const [progressRows, sessions, xpTotal] = await Promise.all([
+      const [progressRows, sessions, ledger, rewardItems, notes] = await Promise.all([
         loadProgressServer(learner.id),
         loadRecentSessionsServer(learner.id, 60, today),
-        loadXpTotalServer(learner.id),
+        loadLedgerTotalsServer(learner.id),
+        loadRewardItemsServer(learner.id),
+        loadNotesServer(learner.id, addDaysToDateStr(today, -6), today),
       ]);
-      return { learner, progressRows, sessions, xpTotal };
+      return { learner, progressRows, sessions, xpTotal: ledger.earned, balance: ledger.balance, rewardItems, notes };
     })
   );
 

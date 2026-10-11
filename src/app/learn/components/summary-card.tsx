@@ -15,10 +15,16 @@ interface SummaryCardProps {
   correct: number;
   total: number;
   xp: number;
+  /** family currency earned this block, e.g. { amount: 1.5, name: "Lightning Bucks" } */
+  currency?: { amount: number; name: string };
+  /** streak flame after this block (frozen days never reset it) */
+  streak?: { days: number; label: string };
   masteryChanges: MasteryChange[];
   confetti?: boolean;
   primary: { label: string; href: string };
   secondary?: { label: string; href: string };
+  /** extra line under the title (e.g. placement results) */
+  note?: string;
 }
 
 const CONFETTI_COLORS = ["#3b82f6", "#6366f1", "#f59e0b", "#10b981", "#ec4899", "#8b5cf6"];
@@ -30,7 +36,20 @@ const STATUS_WORD: Record<SkillStatus, string> = {
   mastered: "Mastered ⭐",
 };
 
-export default function SummaryCard({ title, subtitle, correct, total, xp, masteryChanges, confetti = false, primary, secondary }: SummaryCardProps) {
+export default function SummaryCard({
+  title,
+  subtitle,
+  correct,
+  total,
+  xp,
+  currency,
+  streak,
+  masteryChanges,
+  confetti = false,
+  primary,
+  secondary,
+  note,
+}: SummaryCardProps) {
   const pct = total > 0 ? Math.round((100 * correct) / total) : 0;
   return (
     <div className="relative overflow-hidden rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
@@ -59,6 +78,7 @@ export default function SummaryCard({ title, subtitle, correct, total, xp, maste
         </p>
         <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-900">{title}</h2>
         {subtitle && <p className="mt-1 text-sm font-medium text-slate-400">{subtitle}</p>}
+        {note && <p className="mt-2 text-sm font-semibold text-slate-600">{note}</p>}
 
         <div className="mt-5 grid grid-cols-2 gap-3">
           <div className="rounded-2xl bg-slate-50 p-4">
@@ -71,13 +91,30 @@ export default function SummaryCard({ title, subtitle, correct, total, xp, maste
           <div className="rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 p-4 text-white">
             <p className="text-xs font-semibold uppercase tracking-wider text-white/70">XP earned</p>
             <p className="mt-1 text-3xl font-bold">+{xp}</p>
+            {currency && currency.amount > 0 && (
+              <p className="mt-0.5 text-xs font-semibold text-white/80">
+                = {currency.amount} {currency.name}
+              </p>
+            )}
           </div>
         </div>
+
+        {streak && (
+          <div className="mt-3 flex items-center justify-center gap-2 rounded-2xl bg-orange-50 px-3 py-2.5 text-sm font-semibold text-orange-800">
+            <span className="animate-flame text-xl" aria-hidden>
+              🔥
+            </span>
+            {streak.days} day{streak.days === 1 ? "" : "s"} · {streak.label}
+          </div>
+        )}
 
         {masteryChanges.length > 0 && (
           <ul className="mt-4 space-y-2 text-left">
             {masteryChanges.map((c) => (
-              <li key={c.kidTitle} className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${c.to === "mastered" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}>
+              <li
+                key={c.kidTitle}
+                className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${c.to === "mastered" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}
+              >
                 {c.to === "mastered" ? "⭐" : "📝"} {c.kidTitle}: {STATUS_WORD[c.from]} → {STATUS_WORD[c.to]}
               </li>
             ))}

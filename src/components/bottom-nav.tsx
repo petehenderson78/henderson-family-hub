@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { kidSlugForEmail } from "@/lib/learn/stats";
 
 const tabs = [
   {
@@ -78,12 +80,37 @@ const tabs = [
   },
 ];
 
+/** Tabs a kid login never sees (parents only). */
+const PARENT_ONLY = new Set(["/budget"]);
+
+/** The player owns the whole screen: no nav on /learn/<slug>/play. */
+function isPlayRoute(pathname: string): boolean {
+  return /^\/learn\/[^/]+\/play(\/|$)/.test(pathname);
+}
+
 export default function BottomNav() {
   const pathname = usePathname();
   const router = useRouter();
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
+  // Kid logins (cole@/lily@) get a trimmed nav. Read from the local session (no network) and
+  // keep it in sync with auth changes; until known, assume parent (worst case: an extra tab for a frame).
+  const [kid, setKid] = useState(false);
 
-  if (pathname === "/login") return null;
+  useEffect(() => {
+    let alive = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (alive) setKid(kidSlugForEmail(data.session?.user?.email) !== null);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (alive) setKid(kidSlugForEmail(session?.user?.email) !== null);
+    });
+    return () => {
+      alive = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  if (pathname === "/login" || isPlayRoute(pathname)) return null;
 
   async function handleSignOut() {
     await supabase.auth.signOut();
@@ -94,32 +121,36 @@ export default function BottomNav() {
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200/60 bg-white/70 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]">
       <div className="mx-auto flex max-w-lg items-center justify-around">
-        {tabs.map((tab) => {
-          const active = tab.href === "/" ? pathname === tab.href : pathname === tab.href || pathname.startsWith(`${tab.href}/`);
-          return (
-            <Link
-              key={tab.href}
-              href={tab.href}
-              className={`tab-press flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 text-[10px] font-semibold tracking-wide ${
-                active ? "text-blue-600" : "text-slate-400"
-              }`}
-            >
-              {active ? tab.activeIcon : tab.inactiveIcon}
-              <span>{tab.label}</span>
-            </Link>
-          );
-        })}
-        <button
-          onClick={handleSignOut}
-          className="tab-press flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 text-[10px] font-semibold tracking-wide text-slate-400"
-        >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-            <polyline points="16 17 21 12 16 7" />
-            <line x1="21" y1="12" x2="9" y2="12" />
-          </svg>
-          <span>Sign Out</span>
-        </button>
+        {tabs
+          .filter((tab) => !(kid && PARENT_ONLY.has(tab.href)))
+          .map((tab) => {
+            const active = tab.href === "/" ? pathname === tab.href : pathname === tab.href || pathname.startsWith(`${tab.href}/`);
+            return (
+              <Link
+                key={tab.href}
+                href={tab.href}
+                className={`tab-press flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 text-[10px] font-semibold tracking-wide ${
+                  active ? "text-blue-600" : "text-slate-400"
+                }`}
+              >
+                {active ? tab.activeIcon : tab.inactiveIcon}
+                <span>{tab.label}</span>
+              </Link>
+            );
+          })}
+        {!kid && (
+          <button
+            onClick={handleSignOut}
+            className="tab-press flex min-h-[56px] flex-1 flex-col items-center justify-center gap-1 text-[10px] font-semibold tracking-wide text-slate-400"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            <span>Sign Out</span>
+          </button>
+        )}
       </div>
     </nav>
   );

@@ -2,35 +2,47 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import type { Learner, LearnerSettings, SessionBlock, SessionRecord, SkillProgress } from "@/lib/learn/types";
-import { catalogFor } from "@/lib/learn/catalog";
-import { BLOCK_EMOJI, levelFor, mergeProgress, planMission } from "@/lib/learn/mastery";
+import type { Learner, LearnerSettings, SessionBlock, SessionRecord, Skill, SkillProgress } from "@/lib/learn/types";
+import { catalogFor, SUBJECT_LABEL } from "@/lib/learn/catalog";
+import { levelFor, mergeProgress, planMission } from "@/lib/learn/mastery";
 import {
   computeStreak,
   daysPracticedThisWeek,
+  formatClockLabel,
+  isPaused,
   masteredCount,
   masteredThisWeek,
   masteryPercent,
   minutesThisWeek,
   reviewDueCount,
-  rotationPlan,
   sessionForDate,
+  struggleFlags,
   todayStatus,
+  vacationReturnLabel,
+  weeklyRing,
   xpThisWeek,
 } from "@/lib/learn/stats";
-import { weekDates, weekdayShort } from "@/lib/learn/dates";
-import { updateLearnerSettings } from "@/lib/learn/store";
+import { addDays, weekDates, weekdayShort } from "@/lib/learn/dates";
+import { saveProgress, updateLearnerSettings } from "@/lib/learn/store";
+import { addNote, upsertRewardItem, NOTE_KIND_LABEL, type LearnNote, type RewardItem } from "@/lib/learn/store-notes";
 import { fetchCoachLog } from "@/lib/learn/coach-client";
 import type { CoachLogMessage } from "@/lib/learn/coach-types";
 import { KID_EMOJI } from "../learn-home";
 import ProgressRing from "../components/progress-ring";
 import StreakFlame from "../components/streak-flame";
+import LogBookForm from "../components/log-book-form";
 
 export interface ParentKid {
   learner: Learner;
   progressRows: SkillProgress[];
   sessions: SessionRecord[];
+  /** XP earned (positive ledger entries) */
   xpTotal: number;
+  /** spendable balance (whole ledger) */
+  balance: number;
+  rewardItems: RewardItem[];
+  /** last 7 days of learn_notes */
+  notes: LearnNote[];
 }
 
 interface ParentViewProps {
@@ -51,30 +63,38 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
     const catalog = catalogFor(k.learner.slug);
     const progressMap = mergeProgress(catalog, k.progressRows);
     const session = sessionForDate(k.sessions, today);
+    const paused = isPaused(k.learner.settings, today);
     const blocks: SessionBlock[] =
       session && session.blocks.length > 0
         ? session.blocks
-        : planMission(catalog, progressMap, k.learner.settings, now).blocks.map((b) => ({ ...b, done: false }));
+        : paused
+          ? []
+          : planMission(catalog, progressMap, k.learner.settings, now, today).blocks.map((b) => ({ ...b, done: false }));
     return {
       ...k,
       catalog,
       progressMap,
       session,
       blocks,
+      paused,
       status: todayStatus(session),
       masteryPct: masteryPercent(catalog, progressMap),
       mastered: masteredCount(catalog, progressMap),
       minutesWeek: minutesThisWeek(k.sessions, today),
       xpWeek: xpThisWeek(k.sessions, today),
-      streak: computeStreak(k.sessions, today),
+      streak: computeStreak(k.sessions, today, k.learner.settings),
+      ring: weeklyRing(k.sessions, today),
       due: reviewDueCount(catalog, progressMap, now),
       days: daysPracticedThisWeek(k.sessions, today),
       masteredWeek: masteredThisWeek(catalog, progressMap, today),
+      flags: struggleFlags(catalog, progressMap),
     };
   });
 
-  const turns = rotationPlan(derived.map((d) => ({ slug: d.learner.slug, name: d.learner.name, mission: { blocks: d.blocks } })));
-  const totalPlanMinutes = turns.reduce((s, t) => s + t.minutes, 0);
+  const [notesByKid, setNotesByKid] = useState<Record<string, LearnNote[]>>(() => Object.fromEntries(kids.map((k) => [k.learner.id, k.notes])));
+  function pushNote(note: LearnNote) {
+    setNotesByKid((m) => ({ ...m, [note.learnerId]: [note, ...(m[note.learnerId] ?? [])] }));
+  }
 
   return (
     <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
@@ -83,16 +103,26 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
           ← Learn
         </Link>
         <h1 className="mt-3 text-[28px] font-bold tracking-tight text-slate-900">Parent view</h1>
-        <p className="mt-1.5 text-sm font-medium text-slate-400">Both kids at a glance, today&apos;s plan, and settings.</p>
+        <p className="mt-1.5 text-sm font-medium text-slate-400">Both kids at a glance, flags, settings, rewards and the evidence report.</p>
 
         {derived.length === 0 && (
           <div className="mt-6 rounded-2xl border border-dashed border-slate-200 bg-white/50 p-6 text-center text-sm text-slate-400">
-            No learners found. Run supabase/migrations/007_learn.sql.
+            No learners found. Run supabase/migrations/007_learn.sql and 008_learn_notes.sql.
           </div>
         )}
 
+        {derived.length > 0 && (
+          <Link
+            href="/learn/tonight"
+            className="tab-press mt-5 flex min-h-[60px] items-center justify-between rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 px-5 text-white shadow-lg shadow-blue-500/25"
+          >
+            <span className="text-base font-bold">🌙 Run tonight</span>
+            <span className="text-xs font-semibold text-white/80">rotation · scripts · homework · log →</span>
+          </Link>
+        )}
+
         {/* Per-kid summary */}
-        <div className="mt-6 space-y-3">
+        <div className="mt-5 space-y-3">
           {derived.map((d) => (
             <div key={d.learner.id} className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
               <div className="flex items-center gap-4">
@@ -107,10 +137,14 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
                     </span>
                   </p>
                   <p className="text-xs font-medium text-slate-400">
-                    {d.mastered}/{d.catalog.length} skills mastered · {d.xpTotal} XP
+                    {d.mastered}/{d.catalog.length} skills mastered · {d.xpTotal} XP · {d.balance} {d.learner.settings.theme.currency}
                   </p>
                   <p className={`mt-1 text-xs font-semibold ${d.status.status === "done" ? "text-emerald-600" : "text-slate-500"}`}>
-                    Today: {d.status.status === "done" ? "✓ done" : d.status.status === "in-progress" ? `${d.status.blocksDone}/${d.status.blocksTotal} blocks` : "not started"}
+                    {d.paused
+                      ? `🏖️ Vacation until ${vacationReturnLabel(d.learner.settings.pausedUntil ?? today)}`
+                      : `Today: ${d.status.status === "done" ? "✓ done" : d.status.status === "in-progress" ? `${d.status.blocksDone}/${d.status.blocksTotal} blocks` : "not started"}`}
+                    {" · "}
+                    {d.ring.done}/{d.ring.target} school nights
                   </p>
                 </div>
                 <StreakFlame streak={d.streak} size="sm" />
@@ -128,50 +162,61 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
                   <p className={`text-lg font-bold ${d.due > 0 ? "text-violet-700" : "text-slate-900"}`}>{d.due}</p>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-2.5">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">XP week</p>
-                  <p className="text-lg font-bold text-slate-900">{d.xpWeek}</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Flags</p>
+                  <p className={`text-lg font-bold ${d.flags.length > 0 ? "text-rose-600" : "text-slate-900"}`}>{d.flags.length}</p>
                 </div>
               </div>
-              <div className="mt-3 flex gap-2">
-                <Link href={`/learn/${d.learner.slug}`} className="flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-slate-50 text-xs font-bold text-slate-700">
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <Link href={`/learn/${d.learner.slug}`} className="flex min-h-[44px] items-center justify-center rounded-xl bg-slate-50 text-xs font-bold text-slate-700">
                   Mission Control
                 </Link>
-                <Link href={`/learn/${d.learner.slug}/map`} className="flex min-h-[44px] flex-1 items-center justify-center rounded-xl bg-slate-50 text-xs font-bold text-slate-700">
+                <Link href={`/learn/${d.learner.slug}/map`} className="flex min-h-[44px] items-center justify-center rounded-xl bg-slate-50 text-xs font-bold text-slate-700">
                   Skill Map
+                </Link>
+                <Link href={`/learn/parent/report/${d.learner.slug}`} className="flex min-h-[44px] items-center justify-center rounded-xl bg-indigo-50 text-xs font-bold text-indigo-700">
+                  📄 Report
                 </Link>
               </div>
             </div>
           ))}
         </div>
 
-        {/* Today's plan */}
-        {turns.length > 0 && (
+        {/* Struggle flags */}
+        {derived.length > 0 && (
           <section className="mt-8">
-            <div className="flex items-end justify-between">
-              <h2 className="text-lg font-bold tracking-tight text-slate-900">Today&apos;s plan (one adult)</h2>
-              <span className="text-xs font-semibold text-slate-400">{totalPlanMinutes} min</span>
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">Needs a hand</h2>
+            <p className="mt-1 text-xs text-slate-400">Skills that hit the stuck rule, failed two review sets, or sit under 60% over the last ten. What to say comes from the skill&apos;s coaching tip.</p>
+            <div className="mt-3 space-y-3">
+              {derived.map((d) =>
+                d.flags.length === 0 ? (
+                  <div key={d.learner.id} className="rounded-2xl border border-slate-100 bg-white p-4 text-sm text-slate-500 shadow-sm">
+                    <span aria-hidden>{KID_EMOJI[d.learner.slug] ?? "⭐"}</span> {d.learner.name}: no flags right now.
+                  </div>
+                ) : (
+                  <div key={d.learner.id} className="rounded-2xl border border-rose-100 bg-white p-4 shadow-sm">
+                    <p className="text-sm font-bold text-slate-900">
+                      <span aria-hidden>{KID_EMOJI[d.learner.slug] ?? "⭐"}</span> {d.learner.name}
+                    </p>
+                    <ul className="mt-2 space-y-2">
+                      {d.flags.map((f) => (
+                        <li key={f.skill.id} className="rounded-xl bg-rose-50/60 p-3">
+                          <p className="text-sm font-semibold text-slate-900">
+                            {f.skill.title} <span className="text-[11px] font-medium text-slate-400">· {f.skill.standards.join(", ")}</span>
+                          </p>
+                          <p className="mt-0.5 text-[11px] font-semibold text-rose-700">{f.reasons.join(" · ")}</p>
+                          <p className="mt-1.5 text-xs text-slate-700">
+                            <span className="font-bold">What to say:</span> “{f.skill.parentTip}”
+                          </p>
+                          <Link href={`/learn/${d.learner.slug}/play?skill=${encodeURIComponent(f.skill.id)}&mode=learn`} className="mt-2 inline-flex min-h-[36px] items-center rounded-lg bg-white px-3 text-xs font-bold text-indigo-700 border border-indigo-100">
+                            Practice it together →
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              )}
             </div>
-            <p className="mt-1 text-xs text-slate-400">Alternate 6-minute turns. The other kid works on their own until it&apos;s their turn.</p>
-            <ol className="mt-3 space-y-2">
-              {turns.map((t) => {
-                const skill = catalogFor(t.learnerSlug).find((s) => s.id === t.block.skillId);
-                const kidDone = derived.find((d) => d.learner.slug === t.learnerSlug)?.blocks.find((b) => b.skillId === t.block.skillId && b.kind === t.block.kind)?.done;
-                return (
-                  <li key={t.index} className={`flex items-start gap-3 rounded-2xl border border-slate-100 bg-white p-3 shadow-sm ${kidDone ? "opacity-50" : ""}`}>
-                    <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-500">{t.index}</span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-slate-900">
-                        <span aria-hidden>{KID_EMOJI[t.learnerSlug] ?? "⭐"}</span> {t.learnerName} · {BLOCK_EMOJI[t.block.kind]} {t.block.label}
-                        {t.parts > 1 ? ` (${t.part}/${t.parts})` : ""}
-                        {kidDone ? " ✓" : ""}
-                      </p>
-                      {skill && <p className="mt-0.5 text-xs text-slate-500">{skill.parentTip}</p>}
-                    </div>
-                    <span className="flex-shrink-0 text-xs font-bold text-slate-400">{t.minutes} min</span>
-                  </li>
-                );
-              })}
-            </ol>
           </section>
         )}
 
@@ -207,13 +252,79 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
           </section>
         )}
 
+        {/* Parent log */}
+        {derived.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">Parent log</h2>
+            <p className="mt-1 text-xs text-slate-400">Book work, school sheets and Together cards from the last 7 days. Everything here lands on the evidence report.</p>
+            <div className="mt-3">
+              <LogBookForm learners={derived.map((d) => ({ id: d.learner.id, name: d.learner.name, slug: d.learner.slug }))} today={today} onSaved={pushNote} />
+            </div>
+            <div className="mt-3 space-y-3">
+              {derived.map((d) => {
+                const notes = notesByKid[d.learner.id] ?? [];
+                return (
+                  <div key={d.learner.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                    <p className="text-sm font-bold text-slate-900">
+                      <span aria-hidden>{KID_EMOJI[d.learner.slug] ?? "⭐"}</span> {d.learner.name}
+                      <span className="ml-2 text-xs font-medium text-slate-400">
+                        {notes.length} entr{notes.length === 1 ? "y" : "ies"} · {notes.reduce((s, n) => s + n.minutes, 0)} min
+                      </span>
+                    </p>
+                    {notes.length > 0 && (
+                      <ul className="mt-2 space-y-1.5">
+                        {notes.slice(0, 8).map((n) => (
+                          <li key={n.id ?? `${n.date}-${n.createdAt}`} className="flex items-center gap-2 text-xs text-slate-600">
+                            <span className="w-12 flex-shrink-0 font-semibold tabular-nums text-slate-400">{n.date.slice(5)}</span>
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-500">{NOTE_KIND_LABEL[n.kind]}</span>
+                            <span className="min-w-0 flex-1 truncate">{n.text}</span>
+                            <span className="flex-shrink-0 font-semibold tabular-nums text-slate-400">
+                              {n.minutes} min{typeof n.score === "number" && typeof n.total === "number" ? ` · ${n.score}/${n.total}` : ""}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Mark as mastered */}
+        {derived.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">Mark as mastered</h2>
+            <p className="mt-1 text-xs text-slate-400">Seed what the books already proved (DONE stays DONE). Marked skills get a review in 7 days.</p>
+            <div className="mt-3 space-y-3">
+              {derived.map((d) => (
+                <MarkMastered key={d.learner.id} learner={d.learner} catalog={d.catalog} progressMap={d.progressMap} today={today} onNote={pushNote} />
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Settings */}
         {derived.length > 0 && (
           <section className="mt-8">
             <h2 className="text-lg font-bold tracking-tight text-slate-900">Settings</h2>
             <div className="mt-3 space-y-3">
               {derived.map((d) => (
-                <SettingsEditor key={d.learner.id} learner={d.learner} />
+                <SettingsEditor key={d.learner.id} learner={d.learner} today={today} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Reward store */}
+        {derived.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">Reward store</h2>
+            <p className="mt-1 text-xs text-slate-400">What the kids can spend their points on. Redeeming needs a parent&apos;s hold-to-confirm on their screen.</p>
+            <div className="mt-3 space-y-3">
+              {derived.map((d) => (
+                <RewardItemsManager key={d.learner.id} learner={d.learner} items={d.rewardItems} balance={d.balance} />
               ))}
             </div>
           </section>
@@ -254,19 +365,22 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
   );
 }
 
-function SettingsEditor({ learner }: { learner: Learner }) {
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+const FIELD = "w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-base font-bold text-slate-900 outline-none focus:border-indigo-400";
+const LABEL = "mb-1 block text-center text-[10px] font-semibold uppercase tracking-wider text-slate-400";
+
+function SettingsEditor({ learner, today }: { learner: Learner; today: string }) {
   const [form, setForm] = useState<LearnerSettings>(learner.settings);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
-  const set = (path: "dailyMinutes" | "math" | "reading" | "brain" | "rewardRate", raw: string) => {
-    const v = Math.max(0, Math.min(120, Number.parseInt(raw || "0", 10) || 0));
+  const patch = (fn: (f: LearnerSettings) => LearnerSettings) => {
     setState("idle");
-    setForm((f) => {
-      if (path === "dailyMinutes") return { ...f, dailyMinutes: v };
-      if (path === "rewardRate") return { ...f, rewardRate: Math.max(1, v) };
-      return { ...f, blocks: { ...f.blocks, [path]: v } };
-    });
+    setForm(fn);
   };
+  const int = (raw: string, min: number, max: number) => Math.max(min, Math.min(max, Number.parseInt(raw || "0", 10) || 0));
 
   async function save() {
     setState("saving");
@@ -279,37 +393,102 @@ function SettingsEditor({ learner }: { learner: Learner }) {
   }
 
   const blockTotal = form.blocks.math + form.blocks.reading + form.blocks.brain;
-  const field = "w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-base font-bold text-slate-900 outline-none focus:border-indigo-400";
+  const weekendTotal = form.weekend.math + form.weekend.reading + form.weekend.brain;
+  const paused = isPaused(form, today);
 
   return (
     <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
       <p className="text-sm font-bold text-slate-900">
         <span aria-hidden>{KID_EMOJI[learner.slug] ?? "⭐"}</span> {learner.name}
       </p>
-      <div className="mt-3 grid grid-cols-4 gap-2">
-        {(
-          [
-            ["dailyMinutes", "Daily", form.dailyMinutes],
-            ["math", "Math", form.blocks.math],
-            ["reading", "Reading", form.blocks.reading],
-            ["brain", "Brain", form.blocks.brain],
-          ] as const
-        ).map(([key, label, value]) => (
-          <label key={key} className="block">
-            <span className="mb-1 block text-center text-[10px] font-semibold uppercase tracking-wider text-slate-400">{label}</span>
-            <input type="number" inputMode="numeric" min={0} max={120} value={value} onChange={(e) => set(key, e.target.value)} className={field} />
+
+      <p className="mt-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Weekday minutes</p>
+      <div className="mt-1 grid grid-cols-4 gap-2">
+        <label className="block">
+          <span className={LABEL}>Daily</span>
+          <input type="number" inputMode="numeric" min={0} max={120} value={form.dailyMinutes} onChange={(e) => patch((f) => ({ ...f, dailyMinutes: int(e.target.value, 0, 120) }))} className={FIELD} />
+        </label>
+        {(["math", "reading", "brain"] as const).map((k) => (
+          <label key={k} className="block">
+            <span className={LABEL}>{k}</span>
+            <input type="number" inputMode="numeric" min={0} max={120} value={form.blocks[k]} onChange={(e) => patch((f) => ({ ...f, blocks: { ...f.blocks, [k]: int(e.target.value, 0, 120) } }))} className={FIELD} />
           </label>
         ))}
       </div>
-      <div className="mt-2 flex items-center justify-between">
-        <p className={`text-[11px] font-medium ${blockTotal !== form.dailyMinutes ? "text-amber-600" : "text-slate-400"}`}>
-          Blocks add up to {blockTotal} min{blockTotal !== form.dailyMinutes ? ` (daily target ${form.dailyMinutes})` : ""}
-        </p>
-        <label className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
-          XP per buck
-          <input type="number" inputMode="numeric" min={1} value={form.rewardRate} onChange={(e) => set("rewardRate", e.target.value)} className="w-16 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-center text-xs font-bold text-slate-900" />
+      <p className={`mt-1 text-[11px] font-medium ${blockTotal !== form.dailyMinutes ? "text-amber-600" : "text-slate-400"}`}>
+        Blocks add up to {blockTotal} min{blockTotal !== form.dailyMinutes ? ` (daily target ${form.dailyMinutes})` : ""}
+      </p>
+
+      <p className="mt-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Weekend minutes ({weekendTotal} total)</p>
+      <div className="mt-1 grid grid-cols-3 gap-2">
+        {(["math", "reading", "brain"] as const).map((k) => (
+          <label key={k} className="block">
+            <span className={LABEL}>{k}</span>
+            <input type="number" inputMode="numeric" min={0} max={120} value={form.weekend[k]} onChange={(e) => patch((f) => ({ ...f, weekend: { ...f.weekend, [k]: int(e.target.value, 0, 120) } }))} className={FIELD} />
+          </label>
+        ))}
+      </div>
+
+      <p className="mt-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Target grade</p>
+      <div className="mt-1 grid grid-cols-3 gap-2">
+        {(["math", "reading", "reasoning"] as const).map((k) => (
+          <label key={k} className="block">
+            <span className={LABEL}>{k}</span>
+            <input type="number" inputMode="numeric" min={1} max={8} value={form.targetGrade[k]} onChange={(e) => patch((f) => ({ ...f, targetGrade: { ...f.targetGrade, [k]: int(e.target.value, 1, 8) } }))} className={FIELD} />
+          </label>
+        ))}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className={LABEL}>Blocks must start by</span>
+          <input type="time" value={form.stopBy} onChange={(e) => patch((f) => ({ ...f, stopBy: /^([01]\d|2[0-3]):[0-5]\d$/.test(e.target.value) ? e.target.value : f.stopBy }))} className={FIELD} />
+          <span className="mt-1 block text-center text-[10px] text-slate-400">{formatClockLabel(form.stopBy)} · bedtime wind-down after</span>
+        </label>
+        <label className="block">
+          <span className={LABEL}>Pause until</span>
+          <input type="date" value={form.pausedUntil ?? ""} min={today} onChange={(e) => patch((f) => ({ ...f, pausedUntil: /^\d{4}-\d{2}-\d{2}$/.test(e.target.value) ? e.target.value : null }))} className={FIELD} />
+          <span className="mt-1 block text-center text-[10px] text-slate-400">
+            {paused ? (
+              <>
+                🏖️ vacation mode ·{" "}
+                <button type="button" onClick={() => patch((f) => ({ ...f, pausedUntil: null }))} className="font-bold text-indigo-600">
+                  clear
+                </button>
+              </>
+            ) : (
+              "streak freezes, no catch-up"
+            )}
+          </span>
         </label>
       </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className={LABEL}>Currency name</span>
+          <input value={form.theme.currency} maxLength={40} onChange={(e) => patch((f) => ({ ...f, theme: { ...f.theme, currency: e.target.value } }))} className={`${FIELD} text-sm`} />
+        </label>
+        <label className="block">
+          <span className={LABEL}>Level theme</span>
+          <select value={form.theme.levels} onChange={(e) => patch((f) => ({ ...f, theme: { ...f.theme, levels: e.target.value as LearnerSettings["theme"]["levels"] } }))} className={`${FIELD} text-sm`}>
+            <option value="baseball">Baseball</option>
+            <option value="ballet">Ballet</option>
+            <option value="generic">Generic</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <label className="flex min-h-[44px] flex-1 items-center gap-2 rounded-xl bg-slate-50 px-3 text-sm font-semibold text-slate-700">
+          <input type="checkbox" checked={form.autoSpeak} onChange={(e) => patch((f) => ({ ...f, autoSpeak: e.target.checked }))} className="h-5 w-5 accent-indigo-600" />
+          Read prompts aloud automatically
+        </label>
+        <label className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
+          XP per buck
+          <input type="number" inputMode="numeric" min={1} value={form.rewardRate} onChange={(e) => patch((f) => ({ ...f, rewardRate: int(e.target.value, 1, 100000) }))} className="w-16 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-center text-xs font-bold text-slate-900" />
+        </label>
+      </div>
+
       <button
         type="button"
         onClick={save}
@@ -323,6 +502,215 @@ function SettingsEditor({ learner }: { learner: Learner }) {
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Mark as mastered
+// ---------------------------------------------------------------------------
+
+const MARK_INTERVAL_DAYS = 7;
+
+function MarkMastered({
+  learner,
+  catalog,
+  progressMap,
+  today,
+  onNote,
+}: {
+  learner: Learner;
+  catalog: Skill[];
+  progressMap: Record<string, SkillProgress>;
+  today: string;
+  onNote: (n: LearnNote) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [marked, setMarked] = useState<Set<string>>(() => new Set());
+  const [note, setNote] = useState("");
+  const [state, setState] = useState<"idle" | "saving" | "error">("idle");
+
+  const candidates = catalog.filter((s) => progressMap[s.id]?.status !== "mastered" && !marked.has(s.id));
+
+  function toggle(id: string) {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function save() {
+    const skills = candidates.filter((s) => selected.has(s.id));
+    if (skills.length === 0) return;
+    setState("saving");
+    const now = new Date();
+    const nowIso = now.toISOString();
+    try {
+      await saveProgress(
+        learner.id,
+        skills.map((s) => ({
+          ...progressMap[s.id],
+          skillId: s.id,
+          status: "mastered" as const,
+          masteredAt: nowIso,
+          lastPracticedAt: progressMap[s.id]?.lastPracticedAt ?? nowIso,
+          intervalDays: MARK_INTERVAL_DAYS,
+          nextReviewAt: addDays(now, MARK_INTERVAL_DAYS).toISOString(),
+        }))
+      );
+      const saved = await addNote({
+        learnerId: learner.id,
+        date: today,
+        kind: "other",
+        subject: skills[0].subject,
+        text: `Marked mastered by parent: ${skills.map((s) => s.title).join("; ")}${note.trim() ? ` — ${note.trim()}` : ""}`,
+        minutes: 0,
+        score: null,
+        total: null,
+        standards: Array.from(new Set(skills.flatMap((s) => s.standards))),
+      });
+      onNote(saved);
+      setMarked((m) => new Set([...m, ...skills.map((s) => s.id)]));
+      setSelected(new Set());
+      setNote("");
+      setState("idle");
+    } catch {
+      setState("error");
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex min-h-[56px] w-full items-center justify-between px-4 text-left">
+        <span className="text-sm font-bold text-slate-900">
+          <span aria-hidden>{KID_EMOJI[learner.slug] ?? "⭐"}</span> {learner.name}
+          <span className="ml-2 text-xs font-medium text-slate-400">{candidates.length} not yet mastered</span>
+        </span>
+        <span className="text-xs font-semibold text-slate-400">{open ? "Hide ▲" : "Show ▼"}</span>
+      </button>
+      {open && (
+        <div className="border-t border-slate-100 px-4 pb-4">
+          {candidates.length === 0 ? (
+            <p className="py-3 text-xs text-slate-400">Everything on the map is mastered.</p>
+          ) : (
+            <ul className="mt-3 space-y-1.5">
+              {candidates.map((s) => (
+                <li key={s.id}>
+                  <label className="flex min-h-[48px] items-center gap-3 rounded-xl bg-slate-50 px-3 py-2">
+                    <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggle(s.id)} className="h-5 w-5 flex-shrink-0 accent-indigo-600" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-slate-900">{s.title}</span>
+                      <span className="block text-[11px] text-slate-400">
+                        {SUBJECT_LABEL[s.subject]} · G{s.grade} · {s.standards.join(", ")} · {progressMap[s.id]?.status ?? "locked"}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          {candidates.length > 0 && (
+            <>
+              <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} placeholder="Note (e.g. Grade 4 Math pp.32–35 done, confirmed Sep 17)" className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 outline-none focus:border-indigo-400" />
+              <button
+                type="button"
+                onClick={() => void save()}
+                disabled={selected.size === 0 || state === "saving"}
+                className={`mt-2 flex min-h-[48px] w-full items-center justify-center rounded-xl text-sm font-bold text-white ${state === "error" ? "bg-rose-500" : "bg-emerald-600"} disabled:opacity-40`}
+              >
+                {state === "saving" ? "Saving…" : state === "error" ? "Couldn't save — tap to retry" : `Mark ${selected.size || ""} as mastered ⭐`}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Reward items
+// ---------------------------------------------------------------------------
+
+function RewardItemsManager({ learner, items: initial, balance }: { learner: Learner; items: RewardItem[]; balance: number }) {
+  const [items, setItems] = useState<RewardItem[]>(initial);
+  const [title, setTitle] = useState("");
+  const [cost, setCost] = useState(200);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    if (!title.trim()) return;
+    setBusy("new");
+    setError(null);
+    try {
+      const saved = await upsertRewardItem({ learnerId: learner.id, title: title.trim(), cost, active: true });
+      setItems((list) => [...list, saved].sort((a, b) => a.cost - b.cost));
+      setTitle("");
+    } catch {
+      setError("Couldn't add — parents only (check you're signed in as a parent).");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggle(item: RewardItem) {
+    if (!item.id) return;
+    setBusy(item.id);
+    setError(null);
+    try {
+      const saved = await upsertRewardItem({ ...item, active: !item.active });
+      setItems((list) => list.map((i) => (i.id === saved.id ? saved : i)));
+    } catch {
+      setError("Couldn't update — parents only.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+      <p className="text-sm font-bold text-slate-900">
+        <span aria-hidden>{KID_EMOJI[learner.slug] ?? "⭐"}</span> {learner.name}
+        <span className="ml-2 text-xs font-medium text-slate-400">
+          {balance} {learner.settings.theme.currency} to spend
+        </span>
+      </p>
+      {items.length === 0 ? (
+        <p className="mt-2 text-xs text-slate-400">No rewards yet — run 008_learn_notes.sql for the starter set, or add one below.</p>
+      ) : (
+        <ul className="mt-2 space-y-1.5">
+          {items.map((item) => (
+            <li key={item.id ?? item.title} className={`flex items-center gap-3 rounded-xl px-3 py-2 ${item.active ? "bg-slate-50" : "bg-slate-50/50 opacity-60"}`}>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold text-slate-900">{item.title}</span>
+                <span className="block text-[11px] text-slate-400">
+                  {item.cost} {learner.settings.theme.currency}
+                  {!item.active ? " · hidden" : ""}
+                </span>
+              </span>
+              <button type="button" onClick={() => void toggle(item)} disabled={busy === item.id} className={`min-h-[40px] rounded-lg px-3 text-xs font-bold ${item.active ? "bg-white text-slate-600 border border-slate-200" : "bg-indigo-600 text-white"} disabled:opacity-50`}>
+                {item.active ? "Hide" : "Show"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-3 flex gap-2">
+        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={80} placeholder="New reward" className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-400" />
+        <input type="number" inputMode="numeric" min={1} value={cost} onChange={(e) => setCost(Math.max(1, Number.parseInt(e.target.value || "1", 10) || 1))} className="w-20 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2.5 text-center text-sm font-bold text-slate-900 outline-none focus:border-indigo-400" aria-label="cost" />
+        <button type="button" onClick={() => void add()} disabled={!title.trim() || busy === "new"} className="min-h-[44px] rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-40">
+          Add
+        </button>
+      </div>
+      {error && <p className="mt-2 text-xs font-semibold text-rose-600">{error}</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Coach log
+// ---------------------------------------------------------------------------
 
 type CoachLogState = { status: "idle" | "loading" | "error" | "ready"; messages: CoachLogMessage[] };
 

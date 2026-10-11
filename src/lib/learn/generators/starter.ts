@@ -160,14 +160,21 @@ const multFacts: Generator = (ctx) => {
   // Weight toward the harder facts (3-9) so 0/1/10 don't dominate.
   const a = rng() < 0.75 ? int(rng, Math.max(min, 3), Math.min(max, 9)) : int(rng, min, max);
   const b = rng() < 0.75 ? int(rng, Math.max(min, 3), Math.min(max, 9)) : int(rng, min, max);
-  const skip = Array.from({ length: Math.min(a, 4) }, (_, i) => b * (i + 1)).join(", ");
+  // Stop the skip-count one short of a × b so the hint never states the answer.
+  const skipLen = Math.max(0, Math.min(a - 1, 3));
+  const skip = Array.from({ length: skipLen }, (_, i) => b * (i + 1)).join(", ");
   return {
     type: "numeric",
     prompt: `${a} × ${b} = ?`,
     answer: a * b,
     display: { speak: `${a} times ${b}` },
     explain: multExplain(a, b),
-    hint: a === 0 || b === 0 ? "What is any number times zero?" : `Skip count by ${b}: ${skip}${a > 4 ? ", …" : ""}`,
+    hint:
+      a === 0 || b === 0
+        ? "What is any number times zero?"
+        : a === 1 || b === 1
+          ? "Any number times 1 stays the same."
+          : `Skip count by ${b}: ${skip}, … until you have ${a} groups.`,
   };
 };
 

@@ -14,6 +14,14 @@ export type Track = "cole" | "lily" | "both";
 
 export type PracticeMode = "learn" | "review" | "test";
 
+/**
+ * How much help the child had on an answer.
+ *   independent — answered alone (the only kind that counts as correct in the mastery window)
+ *   hint        — answered correctly after seeing the hint (incl. the learn-mode retry)
+ *   taught      — a parent tapped "I helped" on the feedback banner
+ */
+export type HelpLevel = "independent" | "hint" | "taught";
+
 export interface Skill {
   /** e.g. "m1.count120", "m4.frac.equiv", "r3.fig.matrix", "p1.cvc" */
   id: string;
@@ -148,12 +156,20 @@ export interface SkillProgress {
   correct: number;
   /** consecutive correct answers (reset to 0 on a miss) */
   streak: number;
-  /** last 10 results, oldest first */
+  /** last 10 window-eligible results, oldest first (only independent corrects are `true`) */
   window: boolean[];
   intervalDays: number;
   nextReviewAt: string | null;
   lastPracticedAt: string | null;
   masteredAt: string | null;
+  /** consecutive failed 4-item review sets (2 → demoted to learning). Default 0. */
+  reviewMisses?: number;
+  /** set by the stuck rule; the parent dashboard shows a struggle flag. Default false. */
+  needsHelp?: boolean;
+  /** the prompt the child was stuck on (for the parent, next to parentTip) */
+  helpNote?: string | null;
+  /** mastered via a 5/5 test-out rather than practice. Default false. */
+  testOut?: boolean;
 }
 
 export type ProgressMap = Record<string, SkillProgress>;
@@ -171,6 +187,8 @@ export interface LearnerSettings {
   stopBy: string;
   /** YYYY-MM-DD; while today <= pausedUntil, missions are paused and the streak is frozen. */
   pausedUntil: string | null;
+  /** Planned vacations (inclusive YYYY-MM-DD ranges); same effect as pausedUntil. */
+  vacations?: { from: string; to: string }[];
   /** What the child sees: currency name and level theme. */
   theme: { currency: string; levels: "baseball" | "ballet" | "generic" };
   /** Speak prompts automatically (early readers). */
@@ -201,6 +219,10 @@ export interface MissionBlock {
   label: string;
   /** true when the skill is "ready" and can be compacted with a 5-item pretest */
   offerTestOut?: boolean;
+  /** Interleaved review (Friday "mix-up"): the block rotates through these skills; skillId is the first. */
+  skillIds?: string[];
+  /** Fixed item count for set-based blocks (review set = 4, mix-up = 6, test-out = 5). */
+  items?: number;
 }
 
 export interface Mission {
@@ -214,6 +236,8 @@ export interface SessionBlock extends MissionBlock {
   total?: number;
   xp?: number;
   minutes_spent?: number;
+  /** the stuck rule ended this block early (still counts as done — no backlog) */
+  stuck?: boolean;
 }
 
 export interface SessionRecord {
@@ -234,13 +258,24 @@ export interface SessionRecord {
 export type SessionStatus = "planned" | "partial" | "done" | "skipped" | "vacation";
 
 export interface AttemptRecord {
+  id?: string;
   learnerId: string;
   skillId: string;
   mode: PracticeMode;
+  /** stored WITHOUT display.svg (rows.ts strips it) */
   question: Question;
   answer: string;
   correct: boolean;
   ms: number;
+  /** generator seed (rng.questionSeed) so the item can be rebuilt for the report */
+  seed?: number;
+  /** the child saw the hint before this answer */
+  hintUsed?: boolean;
+  /** default "independent" */
+  helpLevel?: HelpLevel;
+  /** client-generated uuid; a retried write with the same id is ignored by the DB */
+  clientId?: string;
+  createdAt?: string;
 }
 
 export interface RewardRecord {
@@ -248,6 +283,8 @@ export interface RewardRecord {
   learnerId: string;
   delta: number;
   reason: string;
+  /** client-generated uuid; duplicate writes are ignored */
+  clientId?: string;
   createdAt?: string;
 }
 

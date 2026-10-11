@@ -147,3 +147,55 @@ input, button, textarea, select {
   display: inline-block;
   animation: learnFlame 1.2s ease-in-out infinite;
 }
+
+/* ---- Learn: evidence pack print styles --------------------------------- */
+@media print {
+  nav,
+  .no-print {
+    display: none !important;
+  }
+  body,
+  .print-root {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .print-root * {
+    color: #000 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+  .print-root {
+    padding-bottom: 0 !important;
+  }
+  .print-break {
+    break-before: page;
+    page-break-before: always;
+  }
+  .print-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  a[href]::after {
+    content: "" !important;
+  }
+}
+
+/* Item dots (early readers see dots, not a countdown) */
+@keyframes learnDotPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.35); }
+}
+
+.animate-dot-pulse {
+  animation: learnDotPulse 1.1s ease-in-out infinite;
+}
+
+/* Tile drop into a slot */
+@keyframes learnTileDrop {
+  0% { transform: translateY(-10px) scale(0.9); opacity: 0.4; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.animate-tile-drop {
+  animation: learnTileDrop 0.18s ease-out;
+}

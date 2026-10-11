@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import DashboardView, { type LearningSummary } from "./dashboard-view";
 import { loadLearnersServer, loadRecentSessionsServer } from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
-import { computeStreak, sessionForDate, todayStatus } from "@/lib/learn/stats";
+import { computeStreak, kidSlugForEmail, sessionForDate, todayStatus } from "@/lib/learn/stats";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -47,9 +47,11 @@ export default async function Home() {
     0
   );
 
-  // Learning: each child's today status + streak (empty if the learn tables don't exist yet)
+  // Learning: each child's today status + streak (empty if the learn tables don't exist yet).
+  // Kid logins see only their own row and land on their Mission Control; parents go to the Tonight runner.
   const learnToday = todayInFamilyTz();
-  const learners = await loadLearnersServer();
+  const kidSlug = kidSlugForEmail(user.email);
+  const learners = (await loadLearnersServer()).filter((l) => !kidSlug || l.slug === kidSlug);
   const learning: LearningSummary[] = await Promise.all(
     learners.map(async (learner) => {
       const sessions = await loadRecentSessionsServer(learner.id, 60, learnToday);
@@ -60,7 +62,7 @@ export default async function Home() {
         status: t.status,
         blocksDone: t.blocksDone,
         blocksTotal: t.blocksTotal,
-        streak: computeStreak(sessions, learnToday),
+        streak: computeStreak(sessions, learnToday, learner.settings),
       };
     })
   );
@@ -72,6 +74,8 @@ export default async function Home() {
       monthTotal={monthTotal}
       userId={user.id}
       learning={learning}
+      learnHref={kidSlug ? `/learn/${kidSlug}` : "/learn/tonight"}
+      learnTitle={kidSlug ? "Your mission" : "Tonight's run"}
     />
   );
 }

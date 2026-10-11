@@ -17,6 +17,8 @@ import {
   type SessionRow,
 } from "./rows";
 import { addDaysToDateStr, todayInFamilyTz } from "./dates";
+import type { LearnNote, RewardItem, Redemption } from "./store-notes";
+import type { AttemptSummary } from "./report";
 
 export async function loadLearnersServer(): Promise<Learner[]> {
   try {
@@ -112,4 +114,165 @@ export async function loadLearnerBundleServer(slug: string, today = todayInFamil
     loadXpTotalServer(learner.id),
   ]);
   return { learner, progress, sessions, xpTotal };
+}
+
+// ---------------------------------------------------------------------------
+// Notes, reward store, attempts, ledger (migration 008). Same contract as
+// above: DB errors → empty data, never a render crash.
+// ---------------------------------------------------------------------------
+
+const NOTE_KINDS = ["book", "homework", "together", "read-aloud", "fluency", "other"] as const;
+
+function noteFromRowServer(row: Record<string, unknown>): LearnNote {
+  const kind = row.kind;
+  const date = row.date;
+  return {
+    id: typeof row.id === "string" ? row.id : undefined,
+    learnerId: String(row.learner_id ?? ""),
+    date: typeof date === "string" ? date.slice(0, 10) : String(date ?? ""),
+    kind: (NOTE_KINDS as readonly string[]).includes(String(kind)) ? (kind as LearnNote["kind"]) : "other",
+    subject: typeof row.subject === "string" ? row.subject : null,
+    text: typeof row.text === "string" ? row.text : null,
+    minutes: Number(row.minutes) || 0,
+    score: typeof row.score === "number" ? row.score : null,
+    total: typeof row.total === "number" ? row.total : null,
+    standards: Array.isArray(row.standards) ? row.standards.filter((v): v is string => typeof v === "string") : [],
+    recordedBy: typeof row.recorded_by === "string" ? row.recorded_by : null,
+    createdAt: typeof row.created_at === "string" ? row.created_at : undefined,
+  };
+}
+
+/** Notes between two YYYY-MM-DD dates (inclusive), newest first. */
+export async function loadNotesServer(learnerId: string, from: string, to: string): Promise<LearnNote[]> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("learn_notes")
+      .select("*")
+      .eq("learner_id", learnerId)
+      .gte("date", from)
+      .lte("date", to)
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false });
+    if (error) return [];
+    return ((data ?? []) as Record<string, unknown>[]).map(noteFromRowServer);
+  } catch {
+    return [];
+  }
+}
+
+export async function loadRewardItemsServer(learnerId: string): Promise<RewardItem[]> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("learn_reward_items").select("*").eq("learner_id", learnerId).order("cost", { ascending: true });
+    if (error) return [];
+    return ((data ?? []) as Record<string, unknown>[]).map((row) => ({
+      id: typeof row.id === "string" ? row.id : undefined,
+      learnerId: String(row.learner_id ?? ""),
+      title: String(row.title ?? ""),
+      cost: Math.max(1, Number(row.cost) || 1),
+      active: row.active !== false,
+      createdAt: typeof row.created_at === "string" ? row.created_at : undefined,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function loadRedemptionsServer(learnerId: string, limit = 50): Promise<Redemption[]> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("learn_redemptions")
+      .select("*")
+      .eq("learner_id", learnerId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error) return [];
+    return ((data ?? []) as Record<string, unknown>[]).map((row) => ({
+      id: typeof row.id === "string" ? row.id : undefined,
+      learnerId: String(row.learner_id ?? ""),
+      itemId: String(row.item_id ?? ""),
+      cost: Number(row.cost) || 0,
+      redeemedBy: typeof row.redeemed_by === "string" ? row.redeemed_by : null,
+      createdAt: typeof row.created_at === "string" ? row.created_at : undefined,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/** Attempt rows for the evidence pack (newest first, capped). Optional columns (help_level, hint_used) are read if present. */
+export async function loadAttemptsServer(learnerId: string, limit = 5000): Promise<AttemptSummary[]> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("learn_attempts")
+      .select("skill_id, mode, correct, created_at, help_level, hint_used")
+      .eq("learner_id", learnerId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    const rows = error
+      ? // Columns from the pending 007 edit may not exist yet → retry with the base columns.
+        (await supabase.from("learn_attempts").select("skill_id, mode, correct, created_at").eq("learner_id", learnerId).order("created_at", { ascending: false }).limit(limit)).data
+      : data;
+    return ((rows ?? []) as Record<string, unknown>[]).map((row) => ({
+      skillId: String(row.skill_id ?? ""),
+      mode: typeof row.mode === "string" ? row.mode : "learn",
+      correct: row.correct === true,
+      helpLevel: typeof row.help_level === "string" ? row.help_level : null,
+      hintUsed: typeof row.hint_used === "boolean" ? row.hint_used : null,
+      createdAt: typeof row.created_at === "string" ? row.created_at : "",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export interface LedgerTotals {
+  /** sum of positive deltas — drives the level (redeeming a reward never demotes) */
+  earned: number;
+  /** sum of all deltas — what the kid can spend in the reward store */
+  balance: number;
+}
+
+export async function loadLedgerTotalsServer(learnerId: string): Promise<LedgerTotals> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("learn_rewards").select("delta").eq("learner_id", learnerId);
+    if (error) return { earned: 0, balance: 0 };
+    let earned = 0;
+    let balance = 0;
+    for (const r of (data ?? []) as { delta: number }[]) {
+      const d = Number(r.delta) || 0;
+      balance += d;
+      if (d > 0) earned += d;
+    }
+    return { earned, balance };
+  } catch {
+    return { earned: 0, balance: 0 };
+  }
+}
+
+export interface TonightKidBundle {
+  learner: Learner;
+  progress: SkillProgress[];
+  sessions: SessionRecord[];
+  /** today's learn_notes (homework ticks, Together cards, book work) */
+  notes: LearnNote[];
+}
+
+/** Both kids for the Tonight runner, in parallel. */
+export async function loadTonightBundleServer(today = todayInFamilyTz()): Promise<TonightKidBundle[]> {
+  const learners = await loadLearnersServer();
+  return Promise.all(
+    learners.map(async (learner) => {
+      const [progress, sessions, notes] = await Promise.all([
+        loadProgressServer(learner.id),
+        loadRecentSessionsServer(learner.id, 14, today),
+        loadNotesServer(learner.id, today, today),
+      ]);
+      return { learner, progress, sessions, notes };
+    })
+  );
 }

@@ -63,3 +63,38 @@ export function addDays(now: Date, days: number): Date {
 export function weekdayShort(dateStr: string): string {
   return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][weekdayIndexMon(dateStr)];
 }
+
+/** Saturday or Sunday (family norm: 105-minute weekend missions). */
+export function isWeekend(dateStr: string): boolean {
+  return weekdayIndexMon(dateStr) >= 5;
+}
+
+/** Friday → the brain block becomes the "mix-up" interleaved review. */
+export function isFriday(dateStr: string): boolean {
+  return weekdayIndexMon(dateStr) === 4;
+}
+
+/** Minutes since local midnight for `now` in the family timezone (0..1439). */
+export function minutesSinceMidnightInFamilyTz(now: Date = new Date()): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: FAMILY_TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return (hour % 24) * 60 + minute;
+}
+
+/** "HH:MM" (24h) → minutes since midnight; null when malformed. */
+export function parseClock(hhmm: string): number | null {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(hhmm.trim());
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+/** Inclusive YYYY-MM-DD range test (string compare is safe for ISO dates). */
+export function dateInRange(dateStr: string, from: string, to: string): boolean {
+  return dateStr >= from && dateStr <= to;
+}

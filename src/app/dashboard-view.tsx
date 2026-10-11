@@ -20,6 +20,9 @@ interface DashboardViewProps {
   monthTotal: number;
   userId: string;
   learning?: LearningSummary[];
+  /** parents → /learn/tonight, kids → their own Mission Control */
+  learnHref?: string;
+  learnTitle?: string;
 }
 
 const KID_EMOJI: Record<string, string> = { cole: "🚀", lily: "🌈" };
@@ -47,6 +50,8 @@ export default function DashboardView({
   todayEvents,
   monthTotal,
   learning = [],
+  learnHref = "/learn",
+  learnTitle = "Today's missions",
 }: DashboardViewProps) {
   const supabase = createClient();
   const [mounted, setMounted] = useState(false);
@@ -162,7 +167,7 @@ export default function DashboardView({
 
         {/* Learning */}
         <Link
-          href="/learn"
+          href={learnHref}
           className="mt-3 block rounded-2xl border border-slate-100 bg-white p-5 shadow-sm active:bg-slate-50"
         >
           <div className="flex items-center justify-between">
@@ -176,7 +181,7 @@ export default function DashboardView({
               </div>
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Learning</p>
-                <p className="text-sm font-semibold text-slate-900">Today&apos;s missions</p>
+                <p className="text-sm font-semibold text-slate-900">{learnTitle}</p>
               </div>
             </div>
             <span className="text-slate-300">→</span>

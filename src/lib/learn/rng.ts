@@ -52,7 +52,18 @@ export function sample<T>(rng: () => number, arr: readonly T[], n: number): T[] 
   return shuffle(rng, arr).slice(0, Math.max(0, Math.min(n, arr.length)));
 }
 
-/** Seed for a question: same learner + skill + attempt count → same item. */
-export function questionSeed(learnerSlug: string, skillId: string, attemptsSoFar: number): number {
-  return hashString(`${learnerSlug}:${skillId}:${attemptsSoFar}`);
+/**
+ * Seed for a question: hash32(slug | skillId | mode | localDate | n).
+ * `n` is a per-play counter the player keeps in component state + sessionStorage
+ * (key `learn:n:<slug>:<skillId>:<date>`), NEVER derived from DB row counts, so a
+ * retried write or a lost network round-trip can never replay an item. The seed
+ * is stored on the attempt row so the report can rebuild the exact question.
+ */
+export function questionSeed(learnerSlug: string, skillId: string, mode: string, localDate: string, n: number): number {
+  return hashString(`${learnerSlug}|${skillId}|${mode}|${localDate}|${n}`);
+}
+
+/** sessionStorage key for the per-play counter behind questionSeed. */
+export function questionCounterKey(learnerSlug: string, skillId: string, localDate: string): string {
+  return `learn:n:${learnerSlug}:${skillId}:${localDate}`;
 }
