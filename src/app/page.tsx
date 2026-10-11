@@ -1,6 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import DashboardView from "./dashboard-view";
+import DashboardView, { type LearningSummary } from "./dashboard-view";
+import { loadLearnersServer, loadRecentSessionsServer } from "@/lib/learn/server";
+import { todayInFamilyTz } from "@/lib/learn/dates";
+import { computeStreak, sessionForDate, todayStatus } from "@/lib/learn/stats";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -44,12 +47,31 @@ export default async function Home() {
     0
   );
 
+  // Learning: each child's today status + streak (empty if the learn tables don't exist yet)
+  const learnToday = todayInFamilyTz();
+  const learners = await loadLearnersServer();
+  const learning: LearningSummary[] = await Promise.all(
+    learners.map(async (learner) => {
+      const sessions = await loadRecentSessionsServer(learner.id, 60, learnToday);
+      const t = todayStatus(sessionForDate(sessions, learnToday));
+      return {
+        slug: learner.slug,
+        name: learner.name,
+        status: t.status,
+        blocksDone: t.blocksDone,
+        blocksTotal: t.blocksTotal,
+        streak: computeStreak(sessions, learnToday),
+      };
+    })
+  );
+
   return (
     <DashboardView
       firstName={firstName}
       todayEvents={todayEvents ?? []}
       monthTotal={monthTotal}
       userId={user.id}
+      learning={learning}
     />
   );
 }

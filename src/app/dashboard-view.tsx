@@ -5,12 +5,24 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { Event, ExternalEvent } from "@/lib/types";
 
+export interface LearningSummary {
+  slug: string;
+  name: string;
+  status: "done" | "in-progress" | "not-started";
+  blocksDone: number;
+  blocksTotal: number;
+  streak: number;
+}
+
 interface DashboardViewProps {
   firstName: string;
   todayEvents: Event[];
   monthTotal: number;
   userId: string;
+  learning?: LearningSummary[];
 }
+
+const KID_EMOJI: Record<string, string> = { cole: "🚀", lily: "🌈" };
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-US", {
@@ -34,6 +46,7 @@ export default function DashboardView({
   firstName,
   todayEvents,
   monthTotal,
+  learning = [],
 }: DashboardViewProps) {
   const supabase = createClient();
   const [mounted, setMounted] = useState(false);
@@ -146,6 +159,53 @@ export default function DashboardView({
             <p className="mt-0.5 text-xs text-slate-400">this month</p>
           </div>
         </div>
+
+        {/* Learning */}
+        <Link
+          href="/learn"
+          className="mt-3 block rounded-2xl border border-slate-100 bg-white p-5 shadow-sm active:bg-slate-50"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 10L12 5 2 10l10 5 10-5z" />
+                  <path d="M6 12.5V17c0 1.1 2.7 3 6 3s6-1.9 6-3v-4.5" />
+                  <line x1="22" y1="10" x2="22" y2="16" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Learning</p>
+                <p className="text-sm font-semibold text-slate-900">Today&apos;s missions</p>
+              </div>
+            </div>
+            <span className="text-slate-300">→</span>
+          </div>
+          {learning.length === 0 ? (
+            <p className="mt-3 text-xs text-slate-400">Set up the Learn module to see Cole and Lily here.</p>
+          ) : (
+            <ul className="mt-4 space-y-2">
+              {learning.map((kid) => (
+                <li key={kid.slug} className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-2.5">
+                  <span className="text-xl" aria-hidden>{KID_EMOJI[kid.slug] ?? "⭐"}</span>
+                  <span className="flex-1 text-sm font-semibold text-slate-900">{kid.name}</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                      kid.status === "done"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : kid.status === "in-progress"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-white text-slate-400 border border-slate-200"
+                    }`}
+                  >
+                    {kid.status === "done" ? "Done ✓" : kid.status === "in-progress" ? `${kid.blocksDone}/${kid.blocksTotal} blocks` : "Not yet"}
+                  </span>
+                  <span className={`text-xs font-bold tabular-nums ${kid.streak > 0 ? "text-orange-600" : "text-slate-300"}`}>🔥 {kid.streak}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Link>
 
         {/* Today's Schedule */}
         <div className="mt-9">

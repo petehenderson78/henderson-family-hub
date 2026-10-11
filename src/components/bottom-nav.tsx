@@ -42,6 +42,24 @@ const tabs = [
     ),
   },
   {
+    label: "Learn",
+    href: "/learn",
+    activeIcon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="#3B82F6" stroke="#3B82F6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 10L12 5 2 10l10 5 10-5z" />
+        <path d="M6 12.5V17c0 1.1 2.7 3 6 3s6-1.9 6-3v-4.5" fill="white" stroke="#3B82F6" />
+        <line x1="22" y1="10" x2="22" y2="16" stroke="#3B82F6" strokeWidth="2" />
+      </svg>
+    ),
+    inactiveIcon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 10L12 5 2 10l10 5 10-5z" />
+        <path d="M6 12.5V17c0 1.1 2.7 3 6 3s6-1.9 6-3v-4.5" />
+        <line x1="22" y1="10" x2="22" y2="16" />
+      </svg>
+    ),
+  },
+  {
     label: "Budget",
     href: "/budget",
     activeIcon: (
@@ -77,7 +95,7 @@ export default function BottomNav() {
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200/60 bg-white/70 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]">
       <div className="mx-auto flex max-w-lg items-center justify-around">
         {tabs.map((tab) => {
-          const active = pathname === tab.href;
+          const active = tab.href === "/" ? pathname === tab.href : pathname === tab.href || pathname.startsWith(`${tab.href}/`);
           return (
             <Link
               key={tab.href}
