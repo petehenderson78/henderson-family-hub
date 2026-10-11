@@ -2,11 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import {
   loadLearnersServer,
-  loadLedgerTotalsServer,
   loadNotesServer,
   loadProgressServer,
   loadRecentSessionsServer,
   loadRewardItemsServer,
+  loadWalletServer,
 } from "@/lib/learn/server";
 import { addDaysToDateStr, todayInFamilyTz } from "@/lib/learn/dates";
 import { kidSlugForEmail } from "@/lib/learn/stats";
@@ -33,14 +33,14 @@ export default async function ParentPage() {
   const learners = await loadLearnersServer();
   const kids: ParentKid[] = await Promise.all(
     learners.map(async (learner) => {
-      const [progressRows, sessions, ledger, rewardItems, notes] = await Promise.all([
+      const [progressRows, sessions, wallet, rewardItems, notes] = await Promise.all([
         loadProgressServer(learner.id),
         loadRecentSessionsServer(learner.id, 60, today),
-        loadLedgerTotalsServer(learner.id),
+        loadWalletServer(learner.id, today),
         loadRewardItemsServer(learner.id),
-        loadNotesServer(learner.id, addDaysToDateStr(today, -6), today),
+        loadNotesServer(learner.id, addDaysToDateStr(today, -7), today),
       ]);
-      return { learner, progressRows, sessions, xpTotal: ledger.earned, balance: ledger.balance, rewardItems, notes };
+      return { learner, progressRows, sessions, xpTotal: wallet.xp, balance: wallet.balance, weekPoints: wallet.weekPoints, rewardItems, notes };
     })
   );
 

@@ -1,13 +1,16 @@
 /**
- * Afternoon workshops — Alpha-style life-skills menu. Three are featured each
- * week (rotated by ISO week number); all stay available. Marking one done
- * awards `xp` via learn_rewards (reason "workshop:<id>").
+ * Weekend workshops (the 30 of the 45-minute brain block). Three are featured
+ * each week (rotated by ISO week number); all stay available. Marking one done
+ * with a logged "Show" pays `points` input points (learn_rewards reason
+ * "pt:workshop:<id>", design §4) and writes the Show to learn_notes.
  *
  * Content agents: enrich or replace entries; keep the `Workshop` shape.
  */
 
 import type { Workshop } from "./types";
-import { XP } from "./mastery";
+
+/** Input points per workshop with a logged Show (design §4). */
+export const WORKSHOP_POINTS = 3;
 
 export const WORKSHOPS: Workshop[] = [
   {
@@ -22,7 +25,7 @@ export const WORKSHOPS: Workshop[] = [
       "Try again with warm vinegar vs. cold. Which fizzes more?",
       "Draw what happened and write the 'why' (a gas called carbon dioxide).",
     ],
-    xp: XP.workshop,
+    points: WORKSHOP_POINTS,
   },
   {
     id: "lemonade-math",
@@ -36,7 +39,7 @@ export const WORKSHOPS: Workshop[] = [
       "Make a sign with the price in big letters.",
       "Practice making change for $5 and $10 with real coins and bills.",
     ],
-    xp: XP.workshop,
+    points: WORKSHOP_POINTS,
   },
   {
     id: "backyard-scientist",
@@ -50,7 +53,7 @@ export const WORKSHOPS: Workshop[] = [
       "Write 2 questions you have about it.",
       "Ask a grown-up or look one up together.",
     ],
-    xp: XP.workshop,
+    points: WORKSHOP_POINTS,
   },
   {
     id: "bridge-builder",
@@ -64,7 +67,7 @@ export const WORKSHOPS: Workshop[] = [
       "Load coins one at a time until it bends. Count them.",
       "Change one thing and rebuild. Did it hold more?",
     ],
-    xp: XP.workshop,
+    points: WORKSHOP_POINTS,
   },
   {
     id: "story-studio",
@@ -78,7 +81,7 @@ export const WORKSHOPS: Workshop[] = [
       "Tell the story out loud in under a minute.",
       "Perform it for someone (voices and props encouraged).",
     ],
-    xp: XP.workshop,
+    points: WORKSHOP_POINTS,
   },
   {
     id: "map-maker",
@@ -92,7 +95,7 @@ export const WORKSHOPS: Workshop[] = [
       "Add a legend with symbols and a compass rose (N, S, E, W).",
       "Hide a 'treasure' and mark it with an X for someone to find.",
     ],
-    xp: XP.workshop,
+    points: WORKSHOP_POINTS,
   },
   {
     id: "chefs-helper",
@@ -106,7 +109,7 @@ export const WORKSHOPS: Workshop[] = [
       "Say what would change if you doubled the recipe.",
       "Clean up your station before you taste.",
     ],
-    xp: XP.workshop,
+    points: WORKSHOP_POINTS,
   },
   {
     id: "tidy-titan",
@@ -120,7 +123,7 @@ export const WORKSHOPS: Workshop[] = [
       "Put the keep pile back in groups and label each group.",
       "Take a before/after photo and show someone.",
     ],
-    xp: XP.workshop,
+    points: WORKSHOP_POINTS,
   },
 ];
 

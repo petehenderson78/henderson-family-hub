@@ -2,13 +2,16 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import type { Learner, LearnerSettings, SessionBlock, SessionRecord, Skill, SkillProgress } from "@/lib/learn/types";
+import { useRouter } from "next/navigation";
+import type { Learner, LearnerSettings, LightWeek, SessionBlock, SessionRecord, Skill, SkillProgress } from "@/lib/learn/types";
 import { catalogFor, SUBJECT_LABEL } from "@/lib/learn/catalog";
-import { levelFor, mergeProgress, planMission, shiftReviewDates } from "@/lib/learn/mastery";
+import { LADDERS, applyPauseEdit, ladderFor, levelFor, markMasteredByParent, mergeProgress, needsSkipCheckFollowUp, shiftReviewDates } from "@/lib/learn/mastery";
 import {
+  POINTS,
   computeStreak,
   daysPracticedThisWeek,
   formatClockLabel,
+  formatDateStr,
   isPaused,
   masteredCount,
   masteredThisWeek,
@@ -18,13 +21,14 @@ import {
   sessionForDate,
   struggleFlags,
   todayStatus,
+  todaysBlocks,
   vacationReturnLabel,
   weeklyRing,
   xpThisWeek,
 } from "@/lib/learn/stats";
-import { addDays, addDaysToDateStr, weekDates, weekdayShort } from "@/lib/learn/dates";
+import { addDaysToDateStr, weekDates, weekdayShort } from "@/lib/learn/dates";
 import { saveProgress, updateLearnerSettings } from "@/lib/learn/store";
-import { addNote, upsertRewardItem, NOTE_KIND_LABEL, type LearnNote, type RewardItem } from "@/lib/learn/store-notes";
+import { addNote, logFinishedBook, upsertRewardItem, NOTE_KIND_LABEL, type LearnNote, type RewardItem } from "@/lib/learn/store-notes";
 import { fetchCoachLog } from "@/lib/learn/coach-client";
 import type { CoachLogMessage } from "@/lib/learn/coach-types";
 import { KID_EMOJI } from "../learn-home";
@@ -36,12 +40,14 @@ export interface ParentKid {
   learner: Learner;
   progressRows: SkillProgress[];
   sessions: SessionRecord[];
-  /** XP earned (positive ledger entries) */
+  /** XP (level ladder only) */
   xpTotal: number;
-  /** spendable balance (whole ledger) */
+  /** spendable input points (points earned − redemptions) */
   balance: number;
+  /** points earned this week (cap 25) */
+  weekPoints: number;
   rewardItems: RewardItem[];
-  /** last 7 days of learn_notes */
+  /** last 8 days of learn_notes */
   notes: LearnNote[];
 }
 
@@ -56,6 +62,7 @@ interface ParentViewProps {
 const DOCS_URL = "https://github.com/petehenderson78/henderson-family-hub/blob/main/docs/learning/README.md";
 
 export default function ParentView({ kids, today, nowIso, coachEnabled }: ParentViewProps) {
+  const router = useRouter();
   const now = new Date(nowIso);
   const week = weekDates(today);
 
@@ -64,12 +71,7 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
     const progressMap = mergeProgress(catalog, k.progressRows);
     const session = sessionForDate(k.sessions, today);
     const paused = isPaused(k.learner.settings, today);
-    const blocks: SessionBlock[] =
-      session && session.blocks.length > 0
-        ? session.blocks
-        : paused
-          ? []
-          : planMission(catalog, progressMap, k.learner.settings, now, today).blocks.map((b) => ({ ...b, done: false }));
+    const blocks: SessionBlock[] = todaysBlocks({ learner: k.learner, catalog, progressMap, sessions: k.sessions, now, today, notes: k.notes });
     return {
       ...k,
       catalog,
@@ -97,7 +99,7 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
   }
 
   return (
-    <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
+    <div className="min-h-[100dvh] bg-[#F8FAFC] pb-[calc(8rem+env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-lg px-4 pt-8">
         <Link href="/learn" className="text-xs font-semibold text-slate-400">
           ← Learn
@@ -132,19 +134,17 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
                 <div className="min-w-0 flex-1">
                   <p className="text-lg font-bold text-slate-900">
                     <span aria-hidden>{KID_EMOJI[d.learner.slug] ?? "⭐"}</span> {d.learner.name}
-                    <span className="ml-2 text-xs font-semibold text-indigo-600">
-                      Lv {levelFor(d.xpTotal).level} · {levelFor(d.xpTotal).name}
-                    </span>
+                    <span className="ml-2 text-xs font-semibold text-indigo-600">{levelFor(d.xpTotal, ladderFor(d.learner.settings.theme)).name}</span>
                   </p>
                   <p className="text-xs font-medium text-slate-400">
-                    {d.mastered}/{d.catalog.length} skills mastered · {d.xpTotal} XP · {d.balance} {d.learner.settings.theme.currency}
+                    {d.mastered}/{d.catalog.length} skills mastered · {d.xpTotal} XP · {d.balance} {d.learner.settings.theme.currency} (
+                    {Math.min(d.weekPoints, POINTS.weeklyCap)}/{POINTS.weeklyCap} this week)
                   </p>
                   <p className={`mt-1 text-xs font-semibold ${d.status.status === "done" ? "text-emerald-600" : "text-slate-500"}`}>
                     {d.paused
-                      ? `🏖️ Vacation until ${vacationReturnLabel(d.learner.settings.pausedUntil ?? today)}`
+                      ? `🏖️ Vacation · back ${vacationReturnLabel(d.learner.settings, today)}`
                       : `Today: ${d.status.status === "done" ? "✓ done" : d.status.status === "in-progress" ? `${d.status.blocksDone}/${d.status.blocksTotal} blocks` : "not started"}`}
-                    {" · "}
-                    {d.ring.done}/{d.ring.target} school nights
+                    {" · "}★ {d.ring.stars}/{d.ring.target} stars{d.ring.fridayFree && !d.ring.closed ? " · Friday Free" : ""}
                   </p>
                 </div>
                 <StreakFlame streak={d.streak} size="sm" />
@@ -185,7 +185,10 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
         {derived.length > 0 && (
           <section className="mt-8">
             <h2 className="text-lg font-bold tracking-tight text-slate-900">Needs a hand</h2>
-            <p className="mt-1 text-xs text-slate-400">Skills that hit the stuck rule, failed two review sets, or sit under 60% over the last ten. What to say comes from the skill&apos;s coaching tip.</p>
+            <p className="mt-1 text-xs text-slate-400">
+              Skills that hit the stuck rule, dropped back to learning after two failed review sets, or sit under 60% over the last ten. Next session opens with a
+              different worked example; what to say comes from the skill&apos;s coaching tip.
+            </p>
             <div className="mt-3 space-y-3">
               {derived.map((d) =>
                 d.flags.length === 0 ? (
@@ -204,6 +207,9 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
                             {f.skill.title} <span className="text-[11px] font-medium text-slate-400">· {f.skill.standards.join(", ")}</span>
                           </p>
                           <p className="mt-0.5 text-[11px] font-semibold text-rose-700">{f.reasons.join(" · ")}</p>
+                          {d.progressMap[f.skill.id]?.needsHelp && d.progressMap[f.skill.id]?.helpNote && (
+                            <p className="mt-0.5 text-[11px] text-slate-500">Stuck on: “{d.progressMap[f.skill.id]?.helpNote}”</p>
+                          )}
                           <p className="mt-1.5 text-xs text-slate-700">
                             <span className="font-bold">What to say:</span> “{f.skill.parentTip}”
                           </p>
@@ -217,6 +223,30 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
                 )
               )}
             </div>
+          </section>
+        )}
+
+        {/* Skip-check follow-ups */}
+        {derived.some((d) => d.catalog.some((s) => needsSkipCheckFollowUp(d.progressMap[s.id]))) && (
+          <section className="mt-8">
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">After a skip check</h2>
+            <p className="mt-1 text-xs text-slate-400">
+              Math 7-8/10 → quick fill (Learn-it card + a few items, skip check again next weekend). Reading 6-8/10 → fill the missed sub-skill, then re-check.
+            </p>
+            <ul className="mt-3 space-y-2">
+              {derived.flatMap((d) =>
+                d.catalog
+                  .filter((s) => needsSkipCheckFollowUp(d.progressMap[s.id]))
+                  .map((s) => (
+                    <li key={`${d.learner.id}-${s.id}`} className="rounded-xl border border-slate-100 bg-white p-3 text-sm shadow-sm">
+                      <span className="font-semibold text-slate-900">
+                        {d.learner.name} · {s.title}
+                      </span>{" "}
+                      <span className="text-[11px] font-semibold text-indigo-600">{d.progressMap[s.id]?.helpNote}</span>
+                    </li>
+                  ))
+              )}
+            </ul>
           </section>
         )}
 
@@ -257,12 +287,17 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
           <section className="mt-8">
             <h2 className="text-lg font-bold tracking-tight text-slate-900">Parent log</h2>
             <p className="mt-1 text-xs text-slate-400">Book work, school sheets and Together cards from the last 7 days. Everything here lands on the evidence report.</p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {derived.map((d) => (
+                <FinishedBook key={d.learner.id} learner={d.learner} today={today} onNote={pushNote} />
+              ))}
+            </div>
             <div className="mt-3">
               <LogBookForm learners={derived.map((d) => ({ id: d.learner.id, name: d.learner.name, slug: d.learner.slug }))} today={today} onSaved={pushNote} />
             </div>
             <div className="mt-3 space-y-3">
               {derived.map((d) => {
-                const notes = notesByKid[d.learner.id] ?? [];
+                const notes = (notesByKid[d.learner.id] ?? []).filter((n) => n.kind !== "pony");
                 return (
                   <div key={d.learner.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
                     <p className="text-sm font-bold text-slate-900">
@@ -299,7 +334,7 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
             <p className="mt-1 text-xs text-slate-400">Seed what the books already proved (DONE stays DONE). Marked skills get a review in 7 days.</p>
             <div className="mt-3 space-y-3">
               {derived.map((d) => (
-                <MarkMastered key={d.learner.id} learner={d.learner} catalog={d.catalog} progressMap={d.progressMap} today={today} onNote={pushNote} />
+                <MarkMastered key={d.learner.id} learner={d.learner} catalog={d.catalog} progressMap={d.progressMap} today={today} onNote={pushNote} onMarked={() => router.refresh()} />
               ))}
             </div>
           </section>
@@ -321,7 +356,10 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
         {derived.length > 0 && (
           <section className="mt-8">
             <h2 className="text-lg font-bold tracking-tight text-slate-900">Reward store</h2>
-            <p className="mt-1 text-xs text-slate-400">What the kids can spend their points on. Redeeming needs a parent&apos;s hold-to-confirm on their screen.</p>
+            <p className="mt-1 text-xs text-slate-400">
+              Points come from inputs only (blocks, starting on time, review sets, finished books, workshops, a surprise bonus) — at most {POINTS.weeklyCap} a week.
+              Redeeming needs a parent&apos;s hold-to-confirm on the kid&apos;s screen. Prices reset quarterly; retire anything that has become the point.
+            </p>
             <div className="mt-3 space-y-3">
               {derived.map((d) => (
                 <RewardItemsManager key={d.learner.id} learner={d.learner} items={d.rewardItems} balance={d.balance} />
@@ -405,15 +443,20 @@ function SettingsEditor({ learner, progressRows, today }: { learner: Learner; pr
   async function save() {
     setState("saving");
     try {
-      await updateLearnerSettings(learner.id, form);
+      // A new / changed "Pause until" starts today; the elapsed part of the old pause is kept as a vacation
+      // range, so clearing a pause never unfreezes the streak for days that were paused.
+      const lightWeeks = (form.lightWeeks ?? []).filter((w) => /^\d{4}-\d{2}-\d{2}$/.test(w.from) && /^\d{4}-\d{2}-\d{2}$/.test(w.to) && w.from <= w.to);
+      const toSave = applyPauseEdit(saved, { ...form, lightWeeks }, today);
+      await updateLearnerSettings(learner.id, toSave);
+      setForm(toSave);
       // Vacation: move every pending review past the newly paused days (once per pause change).
-      const days = newlyPausedDays(saved, form, today);
+      const days = newlyPausedDays(saved, toSave, today);
       const shifted = days > 0 ? shiftReviewDates(rows, days) : rows;
       const changed = shifted.filter((p, i) => p !== rows[i]);
       if (changed.length > 0) await saveProgress(learner.id, changed);
       setRows(shifted);
       setShiftNote(changed.length > 0 ? `Review dates moved ${days} day${days === 1 ? "" : "s"}` : null);
-      setSaved(form);
+      setSaved(toSave);
       setState("saved");
     } catch {
       setState("error");
@@ -469,7 +512,7 @@ function SettingsEditor({ learner, progressRows, today }: { learner: Learner; pr
 
       <div className="mt-3 grid grid-cols-2 gap-2">
         <label className="block">
-          <span className={LABEL}>Blocks must start by</span>
+          <span className={LABEL}>Blocks must finish by</span>
           <input type="time" value={form.stopBy} onChange={(e) => patch((f) => ({ ...f, stopBy: /^([01]\d|2[0-3]):[0-5]\d$/.test(e.target.value) ? e.target.value : f.stopBy }))} className={FIELD} />
           <span className="mt-1 block text-center text-[10px] text-slate-400">{formatClockLabel(form.stopBy)} · bedtime wind-down after</span>
         </label>
@@ -491,29 +534,60 @@ function SettingsEditor({ learner, progressRows, today }: { learner: Learner; pr
         </label>
       </div>
 
+      <LightWeeksEditor weeks={form.lightWeeks ?? []} today={today} onChange={(lightWeeks) => patch((f) => ({ ...f, lightWeeks }))} />
+
       <div className="mt-3 grid grid-cols-2 gap-2">
         <label className="block">
           <span className={LABEL}>Currency name</span>
           <input value={form.theme.currency} maxLength={40} onChange={(e) => patch((f) => ({ ...f, theme: { ...f.theme, currency: e.target.value } }))} className={`${FIELD} text-sm`} />
         </label>
         <label className="block">
-          <span className={LABEL}>Level theme</span>
-          <select value={form.theme.levels} onChange={(e) => patch((f) => ({ ...f, theme: { ...f.theme, levels: e.target.value as LearnerSettings["theme"]["levels"] } }))} className={`${FIELD} text-sm`}>
+          <span className={LABEL}>Level ladder</span>
+          <select
+            value={form.theme.levels}
+            onChange={(e) => {
+              const levels = e.target.value as LearnerSettings["theme"]["levels"];
+              patch((f) => ({ ...f, theme: { ...f.theme, levels, ladder: [...LADDERS[levels]] } }));
+            }}
+            className={`${FIELD} text-sm`}
+          >
             <option value="baseball">Baseball</option>
             <option value="ballet">Ballet</option>
             <option value="generic">Generic</option>
           </select>
         </label>
       </div>
+      <p className="mt-1 text-[11px] text-slate-400">Ladder (a level every 500 XP): {ladderFor(form.theme).join(" → ")}</p>
 
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <label className="flex min-h-[44px] flex-1 items-center gap-2 rounded-xl bg-slate-50 px-3 text-sm font-semibold text-slate-700">
+      <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+        <label className="block">
+          <span className={LABEL}>Time-back line</span>
+          <input
+            value={form.theme.timeBack ?? ""}
+            maxLength={120}
+            placeholder="Done by 7:45 = catch in the yard"
+            onChange={(e) => patch((f) => ({ ...f, theme: { ...f.theme, timeBack: e.target.value } }))}
+            className={`${FIELD} text-sm`}
+          />
+        </label>
+        <label className="block">
+          <span className={LABEL}>Screen</span>
+          <select
+            value={form.theme.screen ?? "generic"}
+            onChange={(e) => patch((f) => ({ ...f, theme: { ...f.theme, screen: e.target.value as NonNullable<LearnerSettings["theme"]["screen"]> } }))}
+            className={`${FIELD} text-sm`}
+          >
+            <option value="diamond">Diamond</option>
+            <option value="tutu">Tutu</option>
+            <option value="generic">Plain</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="mt-3">
+        <label className="flex min-h-[44px] items-center gap-2 rounded-xl bg-slate-50 px-3 text-sm font-semibold text-slate-700">
           <input type="checkbox" checked={form.autoSpeak} onChange={(e) => patch((f) => ({ ...f, autoSpeak: e.target.checked }))} className="h-5 w-5 accent-indigo-600" />
           Read prompts aloud automatically
-        </label>
-        <label className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
-          XP per buck
-          <input type="number" inputMode="numeric" min={1} value={form.rewardRate} onChange={(e) => patch((f) => ({ ...f, rewardRate: int(e.target.value, 1, 100000) }))} className="w-16 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-center text-xs font-bold text-slate-900" />
         </label>
       </div>
 
@@ -536,6 +610,82 @@ function SettingsEditor({ learner, progressRows, today }: { learner: Learner; pr
   );
 }
 
+/** Planned light weeks: "review-only" plans review sets only; "off" behaves like vacation (no mission, streak frozen). */
+function LightWeeksEditor({ weeks, today, onChange }: { weeks: LightWeek[]; today: string; onChange: (weeks: LightWeek[]) => void }) {
+  const set = (i: number, patch: Partial<LightWeek>) => onChange(weeks.map((w, j) => (j === i ? { ...w, ...patch } : w)));
+  return (
+    <div className="mt-3">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Light weeks</p>
+      <p className="mt-0.5 text-[11px] text-slate-400">Review-only = review sets only. Off = like vacation: no mission, streak frozen, no catch-up.</p>
+      <ul className="mt-2 space-y-2">
+        {weeks.map((w, i) => (
+          <li key={i} className="grid grid-cols-[1fr_1fr_auto_auto] items-center gap-1.5">
+            <input type="date" value={w.from} onChange={(e) => set(i, { from: e.target.value })} className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold text-slate-900" aria-label="from" />
+            <input type="date" value={w.to} min={w.from} onChange={(e) => set(i, { to: e.target.value })} className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold text-slate-900" aria-label="to" />
+            <select value={w.mode} onChange={(e) => set(i, { mode: e.target.value === "off" ? "off" : "review-only" })} className="rounded-lg border border-slate-200 bg-slate-50 px-1.5 py-2 text-xs font-semibold text-slate-900" aria-label="mode">
+              <option value="review-only">Review-only</option>
+              <option value="off">Off</option>
+            </select>
+            <button type="button" onClick={() => onChange(weeks.filter((_, j) => j !== i))} className="h-9 w-9 rounded-lg bg-slate-100 text-sm font-bold text-slate-500" aria-label="remove light week">
+              ✕
+            </button>
+            <span className="col-span-4 -mt-1 text-[10px] text-slate-400">
+              {w.from && w.to && w.from <= w.to ? `${formatDateStr(w.from)} – ${formatDateStr(w.to)}${w.to < today ? " · past" : w.from <= today ? " · now" : ""}` : "pick a start and an end"}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        onClick={() => onChange([...weeks, { from: today, to: addDaysToDateStr(today, 6), mode: "review-only" }])}
+        className="mt-2 min-h-[40px] rounded-lg bg-slate-50 px-3 text-xs font-bold text-indigo-700"
+      >
+        + Add a light week
+      </button>
+    </div>
+  );
+}
+
+/** "Finished a book" quick action (2 points, design §4) for one kid. */
+function FinishedBook({ learner, today, onNote }: { learner: Learner; today: string; onNote: (n: LearnNote) => void }) {
+  const [title, setTitle] = useState("");
+  const [state, setState] = useState<string | null>(null);
+  async function save() {
+    setState("saving");
+    try {
+      const { note, points } = await logFinishedBook(learner.id, today, title);
+      onNote(note);
+      setTitle("");
+      setState(points > 0 ? `Logged · +${points} ${learner.settings.theme.currency}` : "Logged (weekly cap reached — no points)");
+    } catch {
+      setState("error");
+    }
+  }
+  return (
+    <div className="rounded-2xl border border-emerald-100 bg-white p-3 shadow-sm">
+      <p className="text-xs font-bold text-slate-900">
+        📚 {learner.name} finished a book <span className="font-medium text-slate-400">· +{POINTS.book}</span>
+      </p>
+      <div className="mt-2 flex gap-2">
+        <input
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setState(null);
+          }}
+          maxLength={200}
+          placeholder="Title (retold at dinner)"
+          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-400"
+        />
+        <button type="button" onClick={() => void save()} disabled={state === "saving"} className="min-h-[44px] rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white disabled:opacity-40">
+          {state === "saving" ? "…" : "Log"}
+        </button>
+      </div>
+      {state && state !== "saving" && <p className="mt-1 text-[11px] font-semibold text-slate-500">{state === "error" ? "Couldn't save — try again" : state}</p>}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Mark as mastered
 // ---------------------------------------------------------------------------
@@ -548,12 +698,15 @@ function MarkMastered({
   progressMap,
   today,
   onNote,
+  onMarked,
 }: {
   learner: Learner;
   catalog: Skill[];
   progressMap: Record<string, SkillProgress>;
   today: string;
   onNote: (n: LearnNote) => void;
+  /** reload the server data so counts, flags and plans see the new mastery */
+  onMarked: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -577,20 +730,16 @@ function MarkMastered({
     if (skills.length === 0) return;
     setState("saving");
     const now = new Date();
-    const nowIso = now.toISOString();
     try {
+      // Mastered with a review in 7 days; stuck / review-miss flags and any old test-out mark are cleared.
       await saveProgress(
         learner.id,
-        skills.map((s) => ({
-          ...progressMap[s.id],
-          skillId: s.id,
-          status: "mastered" as const,
-          masteredAt: nowIso,
-          lastPracticedAt: progressMap[s.id]?.lastPracticedAt ?? nowIso,
-          intervalDays: MARK_INTERVAL_DAYS,
-          nextReviewAt: addDays(now, MARK_INTERVAL_DAYS).toISOString(),
-        }))
+        skills.map((s) => markMasteredByParent({ ...progressMap[s.id], skillId: s.id }, now, MARK_INTERVAL_DAYS))
       );
+      // The skills are mastered now: drop them from the list even if the log note below fails.
+      setMarked((m) => new Set([...m, ...skills.map((s) => s.id)]));
+      setSelected(new Set());
+      onMarked();
       const saved = await addNote({
         learnerId: learner.id,
         date: today,
@@ -603,8 +752,6 @@ function MarkMastered({
         standards: Array.from(new Set(skills.flatMap((s) => s.standards))),
       });
       onNote(saved);
-      setMarked((m) => new Set([...m, ...skills.map((s) => s.id)]));
-      setSelected(new Set());
       setNote("");
       setState("idle");
     } catch {
@@ -668,7 +815,7 @@ function MarkMastered({
 function RewardItemsManager({ learner, items: initial, balance }: { learner: Learner; items: RewardItem[]; balance: number }) {
   const [items, setItems] = useState<RewardItem[]>(initial);
   const [title, setTitle] = useState("");
-  const [cost, setCost] = useState(200);
+  const [cost, setCost] = useState(10);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -710,7 +857,7 @@ function RewardItemsManager({ learner, items: initial, balance }: { learner: Lea
         </span>
       </p>
       {items.length === 0 ? (
-        <p className="mt-2 text-xs text-slate-400">No rewards yet — run 008_learn_notes.sql for the starter set, or add one below.</p>
+        <p className="mt-2 text-xs text-slate-400">No rewards yet — run 009_learn_design.sql for the starter store, or add one below.</p>
       ) : (
         <ul className="mt-2 space-y-1.5">
           {items.map((item) => (

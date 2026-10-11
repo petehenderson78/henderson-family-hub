@@ -45,7 +45,7 @@ export default function MissionCard({ slug, blocks, completed }: MissionCardProp
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-slate-900">{b.label}</p>
                   <p className="text-xs font-medium text-slate-400">
-                    {b.minutes} min · {b.mode === "review" ? "Review" : b.mode === "test" ? "Test out" : "Learn"}
+                    {b.minutes} min · {b.skillIds ? "Mix-up" : b.mode === "review" ? "Review set" : b.mode === "test" ? "Skip check" : b.offerTestOut ? "Learn or skip check" : "Learn"}
                     {b.done && typeof b.correct === "number" && typeof b.total === "number" ? ` · ${b.correct}/${b.total}` : ""}
                   </p>
                 </div>
@@ -64,8 +64,8 @@ export default function MissionCard({ slug, blocks, completed }: MissionCardProp
 
       {completed || (blocks.length > 0 && nextIndex === -1) ? (
         <div className="mt-5 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 p-4 text-center text-white shadow-lg shadow-emerald-500/20">
-          <p className="text-lg font-bold">Mission complete! 🎉</p>
-          <p className="mt-0.5 text-xs font-medium text-white/80">Come back tomorrow for a new one.</p>
+          <p className="text-lg font-bold">Mission complete! ⭐</p>
+          <p className="mt-0.5 text-xs font-medium text-white/80">Tonight&apos;s star is in. Same plan tomorrow, nothing carried.</p>
         </div>
       ) : (
         blocks.length > 0 && (

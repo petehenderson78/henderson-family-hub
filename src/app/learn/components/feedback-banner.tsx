@@ -46,10 +46,12 @@ export default function FeedbackBanner({
   const word = feedbackHeadline(correct, helpLevel, explain.length);
   const speech = correct ? `${word} ${explain}` : `Not yet. Here's the idea. ${explain}`;
   return (
-    <div className="fixed inset-x-0 z-40 animate-slide-up" style={{ bottom: "calc(56px + env(safe-area-inset-bottom))" }}>
+    // The player hides the bottom nav, so the banner sits on the safe area; the card scrolls when a long
+    // explanation would push the headline or the answer off a phone screen.
+    <div className="fixed inset-x-0 z-40 animate-slide-up" style={{ bottom: "env(safe-area-inset-bottom)" }}>
       <div className="mx-auto max-w-lg px-4 pb-3">
         <div
-          className={`rounded-2xl border p-4 shadow-xl ${
+          className={`max-h-[70dvh] overflow-y-auto overscroll-contain rounded-2xl border p-4 shadow-xl ${
             correct ? "border-emerald-200 bg-emerald-50 shadow-emerald-500/10" : "border-amber-200 bg-amber-50 shadow-amber-500/10"
           }`}
           role="status"

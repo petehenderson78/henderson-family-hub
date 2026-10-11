@@ -1,65 +1,76 @@
 /**
  * Mastery engine — pure functions, unit-testable, no DOM, relative imports only.
- * Every rule below is asserted by scripts/learn-selfcheck.mts.
+ * Every rule below is asserted by scripts/learn-selfcheck.mts. Numbers follow
+ * the final program design (docs: PROGRAM-DESIGN §3-4, Appendix A).
  *
  * THE MASTERY RULE
  *   A skill is "mastered" when
  *     attempts >= 10  AND  accuracy over the last-10 window >= 0.9  AND  streak >= 3,
  *   where ONLY help_level "independent" correct answers count as correct in the
  *   window. A correct answer given after a hint or with a parent's help is still
- *   logged as correct (the child keeps the point and half the XP — "DONE stays
- *   DONE even when help was needed") but enters the window as `false` and does
- *   not extend the streak (nor reset it).
+ *   logged as correct (half XP — "DONE stays DONE even when help was needed")
+ *   but enters the window as `false` and does not extend the streak (nor reset it).
  *   On mastery: intervalDays = 1 and the first spaced review is due tomorrow.
  *
  * GUESS FILTER
  *   On choice / tap / tiles items a WRONG answer given in under 1.5 s is a tap,
  *   not an answer: it is logged (learn_attempts) but not added to the window,
- *   does not break the streak and does not count as an attempt.
+ *   does not break the streak and does not count as an attempt. The player
+ *   serves a fresh item for the same slot, so review sets and skip checks stay
+ *   4 / 10 real answers.
  *
  * SPACED REVIEW (4-item sets)
- *   A due review is a 4-item set on the skill. >= 3/4 independent-correct →
- *   interval advances along [1, 3, 7, 14, 30, 60] days (only when the review
- *   was actually due, so a bonus review never jumps the ladder). < 3/4 →
+ *   A review is due on the family DATE of nextReviewAt (America/New_York), not
+ *   at its clock time. >= 3/4 independent-correct → interval advances along
+ *   [1, 3, 7, 14, 30, 60] days (only when the review was actually due). < 3/4 →
  *   interval halves (min 1 day) and review_misses += 1. Two consecutive failed
- *   sets (review_misses reaching 2) → status back to "learning", review_misses
- *   reset, interval cleared. The Friday "mix-up" block (6 interleaved items over
- *   mastered skills) updates windows/streaks only — never the interval.
+ *   sets → status back to "learning" (review_misses keeps the count so the parent
+ *   dashboard flags the demotion; it resets on re-mastery).
+ *   Reviews before new learning: a school night runs at most 2 due sets per
+ *   block before its new-skill portion; a third due set replaces the new-skill
+ *   portion. Fridays and weekends run up to 4 due sets per block.
+ *   The Friday "mix-up" (8 interleaved items over mastered skills, 12 on the
+ *   last Friday of the month with the two weakest skills first) updates windows
+ *   and streaks only — never the interval.
  *
  * STUCK RULE (learn mode)
  *   3 consecutive items whose independent (first) answer was wrong → the block
- *   ends early with a kind card and effort XP; progress gets needs_help = true and
- *   help_note = the last prompt, so the parent sees a struggle flag + parentTip.
- *   needs_help clears when the skill is mastered.
+ *   ends early with a kind card and 3 effort XP; progress gets needs_help = true
+ *   and help_note = the last prompt. needs_help clears when the skill is mastered.
  *
- * TEST-OUT (compacting)
- *   A 5-item pretest. 5/5 → mastered with test_out = true and intervalDays = 3.
- *   Anything less → never mastered by the pretest: status "learning" with the
- *   window pre-filled by the results (a 4/5 child is 4 answers closer).
+ * SKIP CHECK (unit pretest, kid label "Skip check"; weekends)
+ *   10 items, no hints, no retry. >= 9/10 → mastered with test_out = true and
+ *   intervalDays = 3. Math 7-8/10 → learning, help_note "quick fill"; reading
+ *   6-8/10 → learning, help_note "hole fill"; anything else → learning. The
+ *   window is pre-filled with the results.
  *
  * PLACEMENT SPRINT
- *   Test-outs up a subject's skills in catalog order starting from the first
- *   non-mastered, unlocked skill (skipping skills with testOut: false); stops
- *   after two consecutive failed test-outs.
+ *   5-item probes up a subject's skills in catalog order. 5/5 → test-out;
+ *   4/5 → one more 5-item set and the pair must reach 9/10; else learn. Stops
+ *   after two consecutive failed skills.
  *
  * BLOCKS, DAYS, STREAK
- *   A block ends by minutes (soft, the current item finishes) with a floor of 5
- *   items. A block may not START unless it can finish before settings.stopBy
- *   (family rule 20:30 ET). Vacation (pausedUntil / vacations) pauses missions.
- *   The streak (streakFromSessions) counts consecutive "done" days and FREEZES —
- *   never resets — on skipped / vacation / partial days and on days before the
- *   first session; a planned day with nothing done breaks it (today excepted).
+ *   A learn block ends by minutes (soft, the current item finishes) with a
+ *   floor of 5 items; review sets, mix-ups and skip checks run their fixed
+ *   count. A block may not START unless it can finish before settings.stopBy.
+ *   Vacation (pausedUntil, vacations, light weeks "off") pauses missions;
+ *   light weeks "review-only" plan review sets only. The streak counts
+ *   consecutive "done" days and FREEZES — never resets — on skipped / vacation /
+ *   partial / paused days, weekend days and a Friday Free; a school night with
+ *   nothing done breaks it (today excepted).
  *
- * XP
- *   10 base per correct answer, +5 at streak >= 3, +10 at streak >= 5 (15 / 20);
- *   pretest items pay the flat base; helped answers pay half (rounded up).
- *   Mastery bonus 100, review set completion 20, stuck-rule effort 10, workshop 50.
+ * XP (drives the level ladder only; the currency is input points, see stats.ts)
+ *   1 per independent correct item, 0.5 when helped; 3 effort XP when the stuck
+ *   card ends a block. Replay decay: the second set of the same skill on the
+ *   same day earns half, the third and later none. A level every 500 XP.
  */
 
 import type {
   BlockKind,
   HelpLevel,
   LearnerSettings,
+  LearnerTheme,
+  LightWeek,
   Mission,
   MissionBlock,
   PracticeMode,
@@ -76,6 +87,7 @@ import {
   addDaysToDateStr,
   dateInRange,
   isFriday,
+  isLastFridayOfMonth,
   isWeekend,
   minutesSinceMidnightInFamilyTz,
   parseClock,
@@ -90,40 +102,70 @@ export const REVIEW_INTERVALS: readonly number[] = [1, 3, 7, 14, 30, 60];
 export const REVIEW_SET_SIZE = 4;
 export const REVIEW_SET_PASS = 3;
 export const REVIEW_MAX_MISSES = 2;
-export const MIXUP_SET_SIZE = 6;
+/** Planned minutes of one 4-item review set inside a block. */
+export const REVIEW_SET_MINUTES = 3;
+/** School night: due sets per block before the new-skill portion. */
+export const REVIEW_NIGHT_CAP = 2;
+/** School night: this many due sets replace the new-skill portion. */
+export const REVIEW_REPLACE_AT = 3;
+export const REVIEW_FRIDAY_CAP = 4;
+export const REVIEW_WEEKEND_CAP = 4;
+export const MIXUP_SET_SIZE = 8;
+export const MIXUP_LAST_FRIDAY_SIZE = 12;
+/** Last Friday of the month: the two weakest mastered skills lead the mix-up. */
+export const MIXUP_REOPEN_WEAKEST = 2;
+export const SKIP_CHECK_ITEMS = 10;
+export const SKIP_CHECK_PASS = 9;
+export const MATH_QUICK_FILL: readonly [number, number] = [7, 8];
+export const READING_HOLE_FILL: readonly [number, number] = [6, 8];
+/** Placement probe size (5 items; 4/5 earns a second probe). */
 export const TEST_OUT_ITEMS = 5;
+export const PLACEMENT_PAIR_PASS = 9;
 export const TEST_OUT_INTERVAL_DAYS = 3;
 export const GUESS_MS = 1500;
+/** After this many filtered taps in a row, the next fast wrong answer counts (no endless re-serving). */
+export const GUESS_STREAK_LIMIT = 3;
 export const STUCK_MISSES = 3;
 export const MIN_BLOCK_ITEMS = 5;
-export const MAX_BLOCK_ITEMS = 20;
+/** A new-skill portion shorter than this is dropped (the block runs its review sets only). */
+export const MIN_LEARN_MINUTES = 3;
 export const PLACEMENT_MAX_FAILS = 2;
+/** XP per level (Appendix A: levelXp 500). */
+export const LEVEL_XP = 500;
 
 /** Item types where a sub-1.5 s wrong answer is treated as a tap, not an answer. */
 export const GUESSABLE_TYPES: ReadonlySet<string> = new Set(["choice", "tap", "tiles"]);
 
 export const XP = {
-  base: 10,
-  streak3Bonus: 5,
-  streak5Bonus: 10,
-  mastery: 100,
-  reviewComplete: 20,
-  effort: 10,
-  workshop: 50,
+  /** per independent correct item */
+  item: 1,
+  /** a hinted / taught correct pays half */
+  helpedFactor: 0.5,
+  /** the stuck card ends a block */
+  effort: 3,
 } as const;
 
-export const LEVEL_NAMES: readonly string[] = [
-  "Rookie",
-  "Explorer",
-  "Builder",
-  "Navigator",
-  "Captain",
-  "Legend",
-  "Champion",
-  "Wizard",
-  "Titan",
-  "Galaxy Brain",
+/** Replay decay: first set of a skill today full XP, second half, third and later none. */
+export const REPLAY_XP: readonly number[] = [1, 0.5, 0];
+
+export const LADDERS: Record<LearnerTheme["levels"], readonly string[]> = {
+  baseball: ["Rookie Ball", "Single-A", "Double-A", "Triple-A", "Lightning 9U Blue", "All-Star"],
+  ballet: ["Barre", "Centre", "Across the Floor", "Recital", "Prima"],
+  generic: ["Rookie", "Explorer", "Builder", "Navigator", "Captain", "Legend"],
+};
+
+export const LEVEL_NAMES: readonly string[] = LADDERS.generic;
+
+/** Planned light weeks (design §14.8): Dec 21 - Jan 1 off, Feb 15-26 review-only. */
+export const DEFAULT_LIGHT_WEEKS: readonly LightWeek[] = [
+  { from: "2026-12-21", to: "2027-01-01", mode: "off" },
+  { from: "2027-02-15", to: "2027-02-26", mode: "review-only" },
 ];
+
+export const TIME_BACK = {
+  cole: "Done by 7:45 = catch in the yard",
+  lily: "Done by 7:45 = dance party before bath",
+} as const;
 
 // ---------------------------------------------------------------------------
 // Progress primitives
@@ -170,10 +212,17 @@ export function nextReviewInterval(current: number): number {
   return REVIEW_INTERVALS[REVIEW_INTERVALS.length - 1];
 }
 
+/**
+ * Due when the family-timezone DATE of nextReviewAt is today or earlier. (Comparing
+ * instants would slip every rung a day whenever tonight's session starts earlier
+ * on the clock than the one that set it.)
+ */
 export function isReviewDue(p: SkillProgress | undefined, now: Date): boolean {
   if (!p || p.status !== "mastered") return false;
   if (!p.nextReviewAt) return true;
-  return new Date(p.nextReviewAt).getTime() <= now.getTime();
+  const at = new Date(p.nextReviewAt);
+  if (Number.isNaN(at.getTime())) return true;
+  return todayInFamilyTz(at) <= todayInFamilyTz(now);
 }
 
 /** One answered item, as the player reports it to the engine. */
@@ -196,6 +245,16 @@ function toAnswer(a: boolean | AnswerInput): Required<Pick<AnswerInput, "correct
 export function isGuess(a: boolean | AnswerInput): boolean {
   const ans = toAnswer(a);
   return !ans.correct && typeof ans.ms === "number" && ans.ms >= 0 && ans.ms < GUESS_MS && GUESSABLE_TYPES.has(ans.questionType ?? "");
+}
+
+/**
+ * The player's guess filter: a fast wrong tap on the FIRST answer to an item is
+ * re-served (logged, never scored), unless `guessStreak` taps in a row were
+ * already filtered — then it counts like any answer. The learn-mode retry
+ * (after the hint) is never filtered.
+ */
+export function shouldFilterGuess(a: AnswerInput, retrying: boolean, guessStreak: number): boolean {
+  return !retrying && guessStreak < GUESS_STREAK_LIMIT && isGuess(a);
 }
 
 /** True when this answer enters the mastery window as a success. */
@@ -224,7 +283,7 @@ function master(p: SkillProgress, now: Date, intervalDays: number, viaTestOut: b
  * - learn mode: counts, window, streak; promotes ready→learning; checks the mastery rule.
  * - review mode on a mastered skill: counts, window and streak only — the
  *   interval is moved by applyReviewSet once the 4-item set is complete.
- * - test mode: counts only — applyTestOut folds the pretest.
+ * - test mode: counts only — applySkipCheck / applyTestOut fold the set.
  * A filtered guess only touches lastPracticedAt.
  */
 export function applyResult(
@@ -267,6 +326,7 @@ export function reviewSetPassed(results: boolean[]): boolean {
  * Fold a completed 4-item review set into a mastered skill's spaced-review
  * state. `results` are per-item "independent correct" flags (the window values).
  * Pass → interval advances (when the review was due); fail → halve / demote.
+ * A demotion keeps review_misses (2) so the parent sees the flag until re-mastery.
  */
 export function applyReviewSet(p: SkillProgress, results: boolean[], now: Date, wasDue = true): SkillProgress {
   if (p.status !== "mastered") return p;
@@ -277,44 +337,97 @@ export function applyReviewSet(p: SkillProgress, results: boolean[], now: Date, 
   }
   const misses = (p.reviewMisses ?? 0) + 1;
   if (misses >= REVIEW_MAX_MISSES) {
-    return { ...p, status: "learning", intervalDays: 0, nextReviewAt: null, masteredAt: null, reviewMisses: 0, testOut: false };
+    return { ...p, status: "learning", intervalDays: 0, nextReviewAt: null, masteredAt: null, reviewMisses: misses, testOut: false };
   }
   const intervalDays = Math.max(1, Math.floor(p.intervalDays / 2));
   return { ...p, intervalDays, nextReviewAt: addDays(now, intervalDays).toISOString(), reviewMisses: misses };
 }
 
-/** 5/5 on the pretest compacts the skill. */
-export function testOut(results: boolean[]): boolean {
-  return results.length >= TEST_OUT_ITEMS && results.slice(0, TEST_OUT_ITEMS).every(Boolean);
+/** Master a skill from a passed test-out set (skip check or placement probe). */
+function masterByTest(p: SkillProgress, taken: boolean[], now: Date): SkillProgress {
+  let streak = p.streak;
+  for (const r of taken) streak = r ? streak + 1 : 0;
+  return master(
+    {
+      ...p,
+      attempts: p.attempts + taken.length,
+      correct: p.correct + taken.filter(Boolean).length,
+      streak,
+      window: [...p.window, ...taken].slice(-WINDOW_SIZE),
+      lastPracticedAt: now.toISOString(),
+    },
+    now,
+    TEST_OUT_INTERVAL_DAYS,
+    true
+  );
 }
 
-/**
- * Fold a completed pretest into progress: 5/5 → mastered (test_out, interval 3d);
- * anything less → "learning" with the window pre-filled by the results.
- */
-export function applyTestOut(p: SkillProgress, results: boolean[], now: Date): SkillProgress {
-  const nowIso = now.toISOString();
-  const taken = results.slice(0, TEST_OUT_ITEMS);
-  if (testOut(taken)) {
-    return master(
-      {
-        ...p,
-        attempts: p.attempts + taken.length,
-        correct: p.correct + taken.length,
-        streak: p.streak + taken.length,
-        window: [...p.window, ...taken].slice(-WINDOW_SIZE),
-        lastPracticedAt: nowIso,
-      },
-      now,
-      TEST_OUT_INTERVAL_DAYS,
-      true
-    );
-  }
+/** A failed test-out set never masters: status "learning" with the window pre-filled by the results. */
+function foldIntoLearning(p: SkillProgress, taken: boolean[], now: Date): SkillProgress {
   const folded = taken.reduce<SkillProgress>((acc, r) => ({ ...applyResult(acc, r, now, "learn"), status: "learning" }), {
     ...p,
     status: p.status === "mastered" ? "learning" : p.status,
   });
   return { ...folded, status: "learning", masteredAt: null, intervalDays: 0, nextReviewAt: null, testOut: false };
+}
+
+/**
+ * Placement probe verdict: 5/5 → pass; 4/5 → a second 5-item set; a pair (10
+ * results) passes at >= 9/10; anything else fails.
+ */
+export function placementProbeResult(results: boolean[]): "pass" | "second-set" | "fail" {
+  const score = results.filter(Boolean).length;
+  if (results.length > TEST_OUT_ITEMS) return score >= PLACEMENT_PAIR_PASS ? "pass" : "fail";
+  if (results.length < TEST_OUT_ITEMS) return "fail";
+  if (score === TEST_OUT_ITEMS) return "pass";
+  return score === TEST_OUT_ITEMS - 1 ? "second-set" : "fail";
+}
+
+/** A test-out passes: 5/5 on one probe, or >= 9/10 over a pair / a skip check. */
+export function testOut(results: boolean[]): boolean {
+  if (results.length >= SKIP_CHECK_ITEMS) return results.slice(0, SKIP_CHECK_ITEMS).filter(Boolean).length >= SKIP_CHECK_PASS;
+  return results.length >= TEST_OUT_ITEMS && results.slice(0, TEST_OUT_ITEMS).every(Boolean);
+}
+
+/**
+ * Fold a finished placement probe (5 results, or the 10 of a pair) into progress:
+ * pass → mastered (test_out, interval 3d); otherwise "learning" with the window pre-filled.
+ */
+export function applyTestOut(p: SkillProgress, results: boolean[], now: Date): SkillProgress {
+  const taken = results.slice(0, SKIP_CHECK_ITEMS);
+  return testOut(taken) ? masterByTest(p, taken, now) : foldIntoLearning(p, taken, now);
+}
+
+export function isReadingSubject(subject: Subject): boolean {
+  return subject === "reading" || subject === "phonics" || subject === "writing";
+}
+
+export type SkipCheckBand = "test-out" | "quick-fill" | "hole-fill" | "learn";
+
+/** Skip check bands (design §3.2): >= 9/10 test-out; math 7-8 quick fill; reading 6-8 hole fill; else learn. */
+export function skipCheckBand(results: boolean[], subject: Subject): SkipCheckBand {
+  const taken = results.slice(0, SKIP_CHECK_ITEMS);
+  const score = taken.filter(Boolean).length;
+  if (taken.length >= SKIP_CHECK_ITEMS && score >= SKIP_CHECK_PASS) return "test-out";
+  if (subject === "math" && score >= MATH_QUICK_FILL[0] && score <= MATH_QUICK_FILL[1]) return "quick-fill";
+  if (isReadingSubject(subject) && score >= READING_HOLE_FILL[0] && score <= READING_HOLE_FILL[1]) return "hole-fill";
+  return "learn";
+}
+
+/** A skill left in "learning" by a skip check's quick fill / hole fill: Learn-it card first, skip check again next weekend. */
+export function needsSkipCheckFollowUp(p: SkillProgress | undefined): boolean {
+  return !!p && p.status === "learning" && (p.helpNote === "quick fill" || p.helpNote === "hole fill");
+}
+
+/** Fold a finished 10-item skip check (independent-correct flags). */
+export function applySkipCheck(p: SkillProgress, results: boolean[], now: Date, subject: Subject): SkillProgress {
+  const taken = results.slice(0, SKIP_CHECK_ITEMS);
+  const band = skipCheckBand(taken, subject);
+  if (band === "test-out") return masterByTest(p, taken, now);
+  const folded = foldIntoLearning(p, taken, now);
+  if (band === "quick-fill") return { ...folded, helpNote: "quick fill" };
+  if (band === "hole-fill") return { ...folded, helpNote: "hole fill" };
+  return folded;
 }
 
 /** The stuck rule: the last 3 items' independent answers were all wrong. */
@@ -332,6 +445,23 @@ export function markNeedsHelp(p: SkillProgress, note: string): SkillProgress {
 export function shiftReviewDates(rows: SkillProgress[], days: number): SkillProgress[] {
   if (!days) return rows;
   return rows.map((p) => (p.status === "mastered" && p.nextReviewAt ? { ...p, nextReviewAt: addDays(new Date(p.nextReviewAt), days).toISOString() } : p));
+}
+
+/** Parent "Mark mastered" (book work proved it): mastered, review in `intervalDays`, flags cleared. */
+export function markMasteredByParent(p: SkillProgress, now: Date, intervalDays = 7): SkillProgress {
+  const nowIso = now.toISOString();
+  return {
+    ...p,
+    status: "mastered",
+    masteredAt: nowIso,
+    lastPracticedAt: p.lastPracticedAt ?? nowIso,
+    intervalDays,
+    nextReviewAt: addDays(now, intervalDays).toISOString(),
+    reviewMisses: 0,
+    needsHelp: false,
+    helpNote: null,
+    testOut: false,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +519,62 @@ export function placementPlan(catalog: Skill[], subject: Subject, progressMap: P
 }
 
 // ---------------------------------------------------------------------------
+// Settings-derived day state: pause, vacations, light weeks
+// ---------------------------------------------------------------------------
+
+export type PauseSettings = Pick<LearnerSettings, "pausedUntil" | "pausedFrom" | "vacations" | "lightWeeks">;
+
+/** The light-week mode covering `date`, if any. */
+export function lightWeekMode(settings: Pick<LearnerSettings, "lightWeeks">, date: string): LightWeek["mode"] | null {
+  const hit = (settings.lightWeeks ?? []).find((w) => dateInRange(date, w.from, w.to));
+  return hit ? hit.mode : null;
+}
+
+/**
+ * Vacation mode on `date`: inside "Pause until" (from pausedFrom; a legacy pause
+ * without a start covers only `today` onward), a vacation range, or an "off"
+ * light week. Pass `today` when asking about past days (the streak walk).
+ */
+export function isPaused(settings: PauseSettings, date: string, today?: string): boolean {
+  if (settings.pausedUntil && date <= settings.pausedUntil) {
+    const from = settings.pausedFrom ?? today ?? date;
+    if (date >= from) return true;
+  }
+  if ((settings.vacations ?? []).some((v) => dateInRange(date, v.from, v.to))) return true;
+  return lightWeekMode(settings, date) === "off";
+}
+
+/** The last paused day of the pause covering `date` (null when not paused). */
+export function pauseEndDate(settings: PauseSettings, date: string): string | null {
+  if (!isPaused(settings, date)) return null;
+  let end = date;
+  for (let i = 0; i < 400 && isPaused(settings, addDaysToDateStr(end, 1), date); i++) end = addDaysToDateStr(end, 1);
+  return end;
+}
+
+/**
+ * Settings editor save: a new / extended "Pause until" starts today (pausedFrom),
+ * and the elapsed part of the previous pause is kept as a vacation range, so
+ * clearing or changing a pause never unfreezes days that were paused.
+ */
+export function applyPauseEdit<T extends PauseSettings>(prev: PauseSettings, next: T, today: string): T {
+  const changed = (prev.pausedUntil ?? null) !== (next.pausedUntil ?? null);
+  let out: T = next;
+  if (changed) out = { ...out, pausedFrom: next.pausedUntil ? today : null };
+  if (changed && prev.pausedUntil) {
+    const from = prev.pausedFrom ?? null;
+    const yesterday = addDaysToDateStr(today, -1);
+    const to = prev.pausedUntil < yesterday ? prev.pausedUntil : yesterday;
+    if (from && from <= to) {
+      const vacations = [...(out.vacations ?? [])];
+      if (!vacations.some((v) => v.from <= from && v.to >= to)) vacations.push({ from, to });
+      out = { ...out, vacations };
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Mission planning
 // ---------------------------------------------------------------------------
 
@@ -433,11 +619,16 @@ interface Choice {
   offerTestOut?: boolean;
 }
 
-/** Due reviews first, then lowest-grade "learning", then lowest-grade "ready", then a bonus review. */
-export function chooseSkillForBlock(pool: Skill[], statuses: ProgressMap, now: Date): Choice | null {
+/**
+ * Due reviews first (unless `skipDue`: the planner runs them as their own sets),
+ * then lowest-grade "learning", then lowest-grade "ready", then a bonus review.
+ */
+export function chooseSkillForBlock(pool: Skill[], statuses: ProgressMap, now: Date, skipDue = false): Choice | null {
   if (pool.length === 0) return null;
-  const due = pool.filter((s) => isReviewDue(statuses[s.id], now)).sort(byNextReview(statuses));
-  if (due.length) return { skill: due[0], mode: "review" };
+  if (!skipDue) {
+    const due = pool.filter((s) => isReviewDue(statuses[s.id], now)).sort(byNextReview(statuses));
+    if (due.length) return { skill: due[0], mode: "review" };
+  }
 
   const learning = pool.filter((s) => statuses[s.id]?.status === "learning").sort(byGrade);
   if (learning.length) return { skill: learning[0], mode: "learn" };
@@ -452,44 +643,77 @@ export function chooseSkillForBlock(pool: Skill[], statuses: ProgressMap, now: D
   return { skill: pool.slice().sort(byGrade)[0], mode: "learn" };
 }
 
-/** Friday "mix-up": up to 6 mastered skills (most overdue first), interleaved. */
-export function mixupSkills(catalog: Skill[], statuses: ProgressMap): Skill[] {
-  return catalog
-    .filter((s) => statuses[s.id]?.status === "mastered")
-    .sort(byNextReview(statuses))
-    .slice(0, MIXUP_SET_SIZE);
+/**
+ * Friday "mix-up": mastered skills, most overdue first, up to `max`. With
+ * `reopenWeakest` (last Friday of the month) the weakest skills (lowest window
+ * accuracy) lead the list — the silent monthly reopen.
+ */
+export function mixupSkills(catalog: Skill[], statuses: ProgressMap, max = MIXUP_SET_SIZE, reopenWeakest = 0): Skill[] {
+  const mastered = catalog.filter((s) => statuses[s.id]?.status === "mastered").sort(byNextReview(statuses));
+  const weakest =
+    reopenWeakest > 0
+      ? mastered
+          .slice()
+          .sort((a, b) => windowAccuracy(statuses[a.id].window) - windowAccuracy(statuses[b.id].window) || byNextReview(statuses)(a, b))
+          .slice(0, reopenWeakest)
+      : [];
+  return [...weakest, ...mastered.filter((s) => !weakest.includes(s))].slice(0, max);
+}
+
+export interface PlanOptions {
+  /** Light week "review-only" (defaults to settings.lightWeeks for the date). */
+  reviewOnly?: boolean;
+  /** Lily's homework rule (design §14.7): tonight's app math is review-only. */
+  mathReviewOnly?: boolean;
+}
+
+/** Due review sets a block may run before (or instead of) its new-skill portion. */
+export function reviewCapFor(date: string): number {
+  return isWeekend(date) ? REVIEW_WEEKEND_CAP : isFriday(date) ? REVIEW_FRIDAY_CAP : REVIEW_NIGHT_CAP;
 }
 
 /**
- * Build today's mission: Math → Reading/Phonics → Brain. Works with any catalog
- * (pass `catalogFor(slug)`), respects settings.blocks / settings.weekend minutes
- * and settings.targetGrade. Never schedules the same generator twice in one
- * mission. `today` is the YYYY-MM-DD date in the family timezone (derived from
- * `now` when omitted); weekends use settings.weekend, Fridays turn the brain
- * block into the mix-up review when the learner has mastered skills.
+ * Build today's mission: Math → Reading/Phonics → Brain. Each kind becomes one
+ * or more blocks: its due 4-item review sets first (reviews before new
+ * learning, see the header for the caps), then the new-skill portion with the
+ * remaining minutes. Works with any catalog (pass `catalogFor(slug)`), respects
+ * settings.blocks / settings.weekend minutes and settings.targetGrade, never
+ * plans the same generator twice for new learning, turns Friday's brain block
+ * into the mix-up and offers the skip check on weekends only. `today` is the
+ * YYYY-MM-DD date in the family timezone (derived from `now` when omitted).
  */
 export function planMission(
   catalog: Skill[],
   progressMap: ProgressMap,
   settings: LearnerSettings,
   now: Date,
-  today?: string
+  today?: string,
+  opts: PlanOptions = {}
 ): Mission {
   const statuses = deriveStatuses(catalog, progressMap);
   const blocks: MissionBlock[] = [];
   const date = today ?? todayInFamilyTz(now);
   const weekend = isWeekend(date);
   const friday = isFriday(date);
+  const reviewOnlyDay = opts.reviewOnly ?? lightWeekMode(settings, date) === "review-only";
+  const cap = reviewCapFor(date);
   const usedGenerators = new Set<string>();
+  const usedSkills = new Set<string>();
+  const sortDue = byNextReview(statuses);
 
   for (const kind of BLOCK_ORDER) {
     const planned = weekend ? (settings.weekend?.[kind] ?? settings.blocks?.[kind]) : settings.blocks?.[kind];
     const minutes = Math.max(0, Math.round(planned ?? 0));
     if (minutes <= 0) continue;
+    const subjectPool = catalog.filter((s) => BLOCK_SUBJECTS[kind].includes(s.subject));
 
     if (kind === "brain" && friday) {
-      const mix = mixupSkills(catalog, statuses);
+      const last = isLastFridayOfMonth(date);
+      const size = last ? MIXUP_LAST_FRIDAY_SIZE : MIXUP_SET_SIZE;
+      const mixPool = catalog.filter((s) => !usedGenerators.has(s.generator) && !usedSkills.has(s.id));
+      const mix = mixupSkills(mixPool, statuses, size, last ? MIXUP_REOPEN_WEAKEST : 0);
       if (mix.length > 0) {
+        for (const s of mix) usedGenerators.add(s.generator);
         blocks.push({
           kind,
           subject: mix[0].subject,
@@ -497,13 +721,53 @@ export function planMission(
           skillIds: mix.map((s) => s.id),
           mode: "review",
           minutes,
-          items: MIXUP_SET_SIZE,
+          items: size,
           label: `${BLOCK_LABEL[kind]} · Mix-up Review`,
           offerTestOut: false,
         });
         continue;
       }
     }
+
+    const reviewOnly = reviewOnlyDay || (kind === "math" && !!opts.mathReviewOnly);
+    const due = subjectPool.filter((s) => !usedSkills.has(s.id) && isReviewDue(statuses[s.id], now)).sort(sortDue);
+    let sets: Skill[];
+    let learn: boolean;
+    if (reviewOnly) {
+      sets = due.slice(0, weekend || friday ? cap : REVIEW_REPLACE_AT);
+      if (sets.length === 0) {
+        const bonus = subjectPool.filter((s) => !usedSkills.has(s.id) && statuses[s.id]?.status === "mastered").sort(sortDue)[0];
+        if (bonus) sets = [bonus];
+      }
+      learn = false;
+    } else if (!weekend && !friday && due.length >= REVIEW_REPLACE_AT) {
+      sets = due.slice(0, REVIEW_REPLACE_AT);
+      learn = false;
+    } else {
+      sets = due.slice(0, cap);
+      learn = true;
+    }
+    let learnMinutes = learn ? minutes - sets.length * REVIEW_SET_MINUTES : 0;
+    if (learn && sets.length > 0 && learnMinutes < MIN_LEARN_MINUTES) {
+      learn = false;
+      learnMinutes = 0;
+    }
+    const setMinutes = learn ? REVIEW_SET_MINUTES : Math.max(2, Math.round(minutes / Math.max(1, sets.length)));
+    for (const s of sets) {
+      usedGenerators.add(s.generator);
+      usedSkills.add(s.id);
+      blocks.push({
+        kind,
+        subject: s.subject,
+        skillId: s.id,
+        mode: "review",
+        minutes: setMinutes,
+        items: REVIEW_SET_SIZE,
+        label: `${BLOCK_LABEL[kind]} · Review · ${s.kidTitle}`,
+        offerTestOut: false,
+      });
+    }
+    if (!learn) continue;
 
     const target =
       kind === "math"
@@ -512,31 +776,31 @@ export function planMission(
           ? settings.targetGrade?.reading
           : settings.targetGrade?.reasoning;
 
-    let subjectPool = catalog.filter((s) => BLOCK_SUBJECTS[kind].includes(s.subject));
+    let pool = subjectPool.filter((s) => !usedSkills.has(s.id));
     if (kind === "reading") {
-      const writing = subjectPool.filter(
-        (s) => s.subject === "writing" && ["ready", "learning"].includes(statuses[s.id]?.status ?? "")
-      );
+      const writing = pool.filter((s) => s.subject === "writing" && ["ready", "learning"].includes(statuses[s.id]?.status ?? ""));
       // Writing prompts are a weekly thing: prefer them on the writing day, skip them otherwise.
-      subjectPool = friday && writing.length ? writing : subjectPool.filter((s) => s.subject !== "writing");
+      pool = friday && writing.length ? writing : pool.filter((s) => s.subject !== "writing");
     }
-    const graded = typeof target === "number" ? subjectPool.filter((s) => s.grade <= target) : subjectPool;
-    const pool = graded.length ? graded : subjectPool;
-    const fresh = pool.filter((s) => !usedGenerators.has(s.generator));
+    const graded = typeof target === "number" ? pool.filter((s) => s.grade <= target) : pool;
+    const scoped = graded.length ? graded : pool;
+    const fresh = scoped.filter((s) => !usedGenerators.has(s.generator));
 
-    const choice = chooseSkillForBlock(fresh.length ? fresh : pool, statuses, now);
+    const choice = chooseSkillForBlock(fresh.length ? fresh : scoped, statuses, now, true);
     if (!choice) continue;
     usedGenerators.add(choice.skill.generator);
+    usedSkills.add(choice.skill.id);
 
     blocks.push({
       kind,
       subject: choice.skill.subject,
       skillId: choice.skill.id,
       mode: choice.mode,
-      minutes,
+      minutes: learnMinutes,
       items: choice.mode === "review" ? REVIEW_SET_SIZE : undefined,
       label: `${BLOCK_LABEL[kind]} · ${choice.skill.kidTitle}`,
-      offerTestOut: choice.offerTestOut ?? false,
+      // Skip checks and level-ups belong to the weekend set (design §14.4); a quick / hole fill is re-checked.
+      offerTestOut: weekend && ((choice.offerTestOut ?? false) || needsSkipCheckFollowUp(statuses[choice.skill.id])),
     });
   }
   return { blocks };
@@ -558,37 +822,54 @@ export function canStartBlock(now: Date, stopBy: string, minutes: number): boole
   return minutesUntilStopBy(now, stopBy) >= Math.max(1, Math.round(minutes));
 }
 
-/** Vacation mode: pausedUntil (inclusive) or any vacation range containing today. */
-export function isPaused(settings: Pick<LearnerSettings, "pausedUntil" | "vacations">, today: string): boolean {
-  if (settings.pausedUntil && today <= settings.pausedUntil) return true;
-  return (settings.vacations ?? []).some((v) => dateInRange(today, v.from, v.to));
+/** The kinds a mission's blocks cover, in order, and whether each is fully done (a "base" / "petal"). */
+export function kindProgress(blocks: { kind: BlockKind; done: boolean }[]): { kind: BlockKind; done: boolean; total: number; doneCount: number }[] {
+  return BLOCK_ORDER.filter((k) => blocks.some((b) => b.kind === k)).map((kind) => {
+    const of = blocks.filter((b) => b.kind === kind);
+    const doneCount = of.filter((b) => b.done).length;
+    return { kind, done: doneCount === of.length, total: of.length, doneCount };
+  });
+}
+
+/** Four school-night stars Monday-Thursday make Friday optional ("Friday Free"). */
+export const FRIDAY_FREE_NIGHTS = 4;
+
+function isDoneSession(s: SessionRecord): boolean {
+  return s.completed || s.status === "done";
+}
+
+/** Friday Free for the week of `friday` (sessions Mon-Thu closed). */
+export function isFridayFree(sessions: SessionRecord[], date: string): boolean {
+  if (!isFriday(date)) return false;
+  const done = new Set(sessions.filter(isDoneSession).map((s) => s.date));
+  let nights = 0;
+  for (let i = 1; i <= 4; i++) if (done.has(addDaysToDateStr(date, -i))) nights += 1;
+  return nights >= FRIDAY_FREE_NIGHTS;
 }
 
 /**
  * Streak flame: consecutive "done" days ending today (or yesterday when today is
- * not done yet). Skipped / vacation / partial days and paused days FREEZE the
- * count (they are stepped over, not reset); days before the first session end
- * the walk; a planned day with nothing done breaks it.
+ * not done yet). Skipped / vacation / partial days, paused days, weekend days
+ * and a Friday Free FREEZE the count (stepped over, not reset); days before the
+ * first session end the walk; a school night with nothing done breaks it.
  */
-export function streakFromSessions(
-  sessions: SessionRecord[],
-  today: string,
-  settings?: Pick<LearnerSettings, "pausedUntil" | "vacations"> | null
-): number {
+export function streakFromSessions(sessions: SessionRecord[], today: string, settings?: PauseSettings | null): number {
   const byDate = new Map<string, SessionRecord>();
   for (const s of sessions) byDate.set(s.date, s);
   if (byDate.size === 0) return 0;
   const first = [...byDate.keys()].sort()[0];
-  const isDone = (s: SessionRecord) => s.completed || s.status === "done";
   const isFrozen = (date: string, s: SessionRecord | undefined) =>
-    (s ? s.status === "skipped" || s.status === "vacation" || s.status === "partial" : false) || (!!settings && isPaused(settings, date));
+    (s ? s.status === "skipped" || s.status === "vacation" || s.status === "partial" : false) ||
+    isWeekend(date) ||
+    isFridayFree(sessions, date) ||
+    (!!settings && isPaused(settings, date, today));
 
   let streak = 0;
   let cursor = today;
   for (let i = 0; i < 400; i++) {
     if (cursor < first) break;
     const s = byDate.get(cursor);
-    if (s && isDone(s)) streak += 1;
+    if (s && isDoneSession(s)) streak += 1;
     else if (cursor === today || isFrozen(cursor, s)) {
       // today not finished yet, or a frozen day: neither counts nor breaks
     } else break;
@@ -608,18 +889,21 @@ export function sessionStatusFor(blocks: { done: boolean }[]): "planned" | "part
 // XP + levels
 // ---------------------------------------------------------------------------
 
-/**
- * XP for one answer. Pretests (mode "test") pay the flat base, no streak bonus.
- * A helped correct answer (hint / taught) pays half, rounded up.
- */
-export function xpFor(correct: boolean, streak: number, mode: PracticeMode = "learn", helpLevel: HelpLevel = "independent"): number {
+/** XP for one answer: 1 independent, 0.5 helped (hint / taught), 0 for a miss. */
+export function xpFor(correct: boolean, helpLevel: HelpLevel = "independent"): number {
   if (!correct) return 0;
-  let xp: number = XP.base;
-  if (mode !== "test") {
-    if (streak >= 5) xp = XP.base + XP.streak5Bonus;
-    else if (streak >= 3) xp = XP.base + XP.streak3Bonus;
-  }
-  return helpLevel === "independent" ? xp : Math.ceil(xp / 2);
+  return helpLevel === "independent" ? XP.item : XP.item * XP.helpedFactor;
+}
+
+/** Replay decay factor for a set when `setsBefore` sets of the same skill were already done today. */
+export function replayFactor(setsBefore: number): number {
+  const i = Math.max(0, Math.floor(setsBefore || 0));
+  return REPLAY_XP[Math.min(i, REPLAY_XP.length - 1)];
+}
+
+/** A finished set's XP (whole number for the ledger): item XP × replay factor, plus effort XP when stuck. */
+export function blockXp(itemXp: number, setsBefore: number, stuck = false): number {
+  return Math.round(Math.max(0, itemXp) * replayFactor(setsBefore)) + (stuck ? XP.effort : 0);
 }
 
 export interface LevelInfo {
@@ -633,35 +917,33 @@ export interface LevelInfo {
   progress: number;
 }
 
-/** level = floor(sqrt(xp / 100)) + 1, with named levels. */
-export function levelFor(xp: number): LevelInfo {
-  const safe = Math.max(0, Math.floor(xp || 0));
-  const level = Math.floor(Math.sqrt(safe / 100)) + 1;
-  const xpStart = 100 * (level - 1) * (level - 1);
-  const xpNext = 100 * level * level;
-  const name =
-    level <= LEVEL_NAMES.length
-      ? LEVEL_NAMES[level - 1]
-      : `${LEVEL_NAMES[LEVEL_NAMES.length - 1]} ${level - LEVEL_NAMES.length + 1}`;
-  return { level, name, xpStart, xpNext, progress: (safe - xpStart) / (xpNext - xpStart) };
+/** The level ladder for a theme (custom ladder first, else the levels theme's default). */
+export function ladderFor(theme: Pick<LearnerTheme, "ladder" | "levels"> | undefined): readonly string[] {
+  if (theme?.ladder && theme.ladder.length > 0) return theme.ladder;
+  return LADDERS[theme?.levels ?? "generic"] ?? LEVEL_NAMES;
 }
 
-/** Family currency earned for an XP amount (settings.rewardRate XP per unit), one decimal. */
-export function currencyFor(xp: number, rewardRate: number): number {
-  const rate = rewardRate > 0 ? rewardRate : 100;
-  return Math.round((xp / rate) * 10) / 10;
+/** A level every 500 XP, named from the ladder ("All-Star 2" past its end). */
+export function levelFor(xp: number, ladder: readonly string[] = LEVEL_NAMES): LevelInfo {
+  const names = ladder.length > 0 ? ladder : LEVEL_NAMES;
+  const safe = Math.max(0, Math.floor(xp || 0));
+  const level = Math.floor(safe / LEVEL_XP) + 1;
+  const xpStart = (level - 1) * LEVEL_XP;
+  const xpNext = level * LEVEL_XP;
+  const name = level <= names.length ? names[level - 1] : `${names[names.length - 1]} ${level - names.length + 1}`;
+  return { level, name, xpStart, xpNext, progress: (safe - xpStart) / LEVEL_XP };
 }
 
 /**
- * How many questions a block should run: a soft cap — the timer also ends the
- * block after MIN_BLOCK_ITEMS. Review = the 4-item set, test = 5, learn ≈ one
- * item per minute (5..20). `items` (from the mission block) wins when given.
+ * How many questions a block should run. Review = the 4-item set, skip check =
+ * 10, learn ≈ 1.2 items per minute (floor 5, no ceiling: the timer ends a learn
+ * block once it has 5 items). `items` (from the mission block) wins when given.
  */
 export function questionTargetFor(mode: PracticeMode, minutes: number, items?: number): number {
   if (typeof items === "number" && items > 0) return items;
-  if (mode === "test") return TEST_OUT_ITEMS;
+  if (mode === "test") return SKIP_CHECK_ITEMS;
   if (mode === "review") return REVIEW_SET_SIZE;
-  return Math.max(MIN_BLOCK_ITEMS, Math.min(MAX_BLOCK_ITEMS, Math.round(minutes * 1.2)));
+  return Math.max(MIN_BLOCK_ITEMS, Math.round(minutes * 1.2));
 }
 
 // ---------------------------------------------------------------------------
@@ -680,10 +962,12 @@ export function defaultSettings(grade: number): LearnerSettings {
     rewardRate: 100,
     stopBy: "20:30",
     pausedUntil: null,
+    pausedFrom: null,
     vacations: [],
+    lightWeeks: DEFAULT_LIGHT_WEEKS.map((w) => ({ ...w })),
     theme: early
-      ? { currency: "Sparkle Points", levels: "ballet" }
-      : { currency: "Lightning Bucks", levels: "baseball" },
+      ? { currency: "Sparkle Points", levels: "ballet", ladder: [...LADDERS.ballet], timeBack: TIME_BACK.lily, screen: "tutu" }
+      : { currency: "Lightning Bucks", levels: "baseball", ladder: [...LADDERS.baseball], timeBack: TIME_BACK.cole, screen: "diamond" },
     autoSpeak: early,
   };
 }
@@ -703,13 +987,24 @@ export function normalizeSettings(raw: unknown, grade: number): LearnerSettings 
     typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : fallback;
   const isDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
   const dateOrNull = (v: unknown) => (isDate(v) ? v : null);
+  const text = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
   const vacations = Array.isArray(r.vacations)
     ? r.vacations
         .map((v) => obj(v))
         .filter((v) => isDate(v.from) && isDate(v.to) && (v.from as string) <= (v.to as string))
         .map((v) => ({ from: v.from as string, to: v.to as string }))
     : [];
-  const levels = theme.levels;
+  const lightWeeks: LightWeek[] = Array.isArray(r.lightWeeks)
+    ? r.lightWeeks
+        .map((v) => obj(v))
+        .filter((v) => isDate(v.from) && isDate(v.to) && (v.from as string) <= (v.to as string))
+        .map((v) => ({ from: v.from as string, to: v.to as string, mode: v.mode === "off" ? ("off" as const) : ("review-only" as const) }))
+    : (d.lightWeeks ?? []);
+  const levels = theme.levels === "baseball" || theme.levels === "ballet" || theme.levels === "generic" ? theme.levels : d.theme.levels;
+  const ladder = Array.isArray(theme.ladder)
+    ? theme.ladder.filter((n): n is string => typeof n === "string" && n.trim().length > 0).map((n) => n.trim().slice(0, 40)).slice(0, 12)
+    : [];
+  const screen = theme.screen === "diamond" || theme.screen === "tutu" || theme.screen === "generic" ? theme.screen : d.theme.screen;
   return {
     dailyMinutes: num(r.dailyMinutes, d.dailyMinutes),
     blocks: {
@@ -730,10 +1025,15 @@ export function normalizeSettings(raw: unknown, grade: number): LearnerSettings 
     rewardRate: num(r.rewardRate, d.rewardRate, 1, 100000),
     stopBy: time(r.stopBy, d.stopBy),
     pausedUntil: dateOrNull(r.pausedUntil),
+    pausedFrom: dateOrNull(r.pausedFrom),
     vacations,
+    lightWeeks,
     theme: {
-      currency: typeof theme.currency === "string" && theme.currency.trim() ? theme.currency.trim().slice(0, 40) : d.theme.currency,
-      levels: levels === "baseball" || levels === "ballet" || levels === "generic" ? levels : d.theme.levels,
+      currency: text(theme.currency, 40) ?? d.theme.currency,
+      levels,
+      ladder: ladder.length > 0 ? ladder : [...(levels === d.theme.levels ? (d.theme.ladder ?? LADDERS[levels]) : LADDERS[levels])],
+      timeBack: typeof theme.timeBack === "string" ? theme.timeBack.trim().slice(0, 120) : d.theme.timeBack,
+      screen,
     },
     autoSpeak: typeof r.autoSpeak === "boolean" ? r.autoSpeak : d.autoSpeak,
   };

@@ -4,14 +4,27 @@ import { useState } from "react";
 import Link from "next/link";
 import type { Learner, SessionBlock, SessionRecord, SkillProgress } from "@/lib/learn/types";
 import { catalogFor } from "@/lib/learn/catalog";
-import { mergeProgress, planMission } from "@/lib/learn/mastery";
-import { computeStreak, isPaused, reviewDueCount, sessionForDate, vacationReturnLabel, weeklyRing } from "@/lib/learn/stats";
-import type { RewardItem } from "@/lib/learn/store-notes";
+import { kindProgress, ladderFor, mergeProgress } from "@/lib/learn/mastery";
+import {
+  POINTS,
+  computeStreak,
+  isPaused,
+  isWeekend,
+  missionLaunchLine,
+  missionRole,
+  reviewDueCount,
+  sessionForDate,
+  todaysBlocks,
+  vacationReturnLabel,
+  weeklyRing,
+} from "@/lib/learn/stats";
+import type { LearnNote, RewardItem } from "@/lib/learn/store-notes";
 import { KID_EMOJI } from "../learn-home";
 import XpBar from "../components/xp-bar";
 import StreakFlame from "../components/streak-flame";
 import WeeklyRing from "../components/weekly-ring";
 import MissionCard from "../components/mission-card";
+import MissionScreen from "../components/mission-screen";
 import RewardsSheet from "../components/rewards-sheet";
 import CoachSheet from "../components/coach-sheet";
 import { useCoach } from "../components/use-coach";
@@ -20,10 +33,14 @@ interface MissionViewProps {
   learner: Learner;
   progressRows: SkillProgress[];
   sessions: SessionRecord[];
-  /** XP earned (positive ledger entries) — drives the level */
+  /** recent learn_notes (Lily's homework rule) */
+  notes: LearnNote[];
+  /** XP (level ladder only) */
   xpTotal: number;
-  /** spendable balance (sum of the whole ledger) in the kid's currency */
+  /** spendable input points (points earned − redemptions) */
   balance: number;
+  /** points earned this week (cap 25) */
+  weekPoints: number;
   rewardItems: RewardItem[];
   today: string;
   nowIso: string;
@@ -33,36 +50,51 @@ interface MissionViewProps {
   isKid: boolean;
 }
 
-export default function MissionView({ learner, progressRows, sessions, xpTotal, balance: initialBalance, rewardItems, today, nowIso, coachEnabled, isKid }: MissionViewProps) {
+export default function MissionView({
+  learner,
+  progressRows,
+  sessions,
+  notes,
+  xpTotal,
+  balance: initialBalance,
+  weekPoints,
+  rewardItems,
+  today,
+  nowIso,
+  coachEnabled,
+  isKid,
+}: MissionViewProps) {
   const catalog = catalogFor(learner.slug);
   const progressMap = mergeProgress(catalog, progressRows);
   const now = new Date(nowIso);
   const session = sessionForDate(sessions, today);
-  const paused = isPaused(learner.settings, today);
-  const blocks: SessionBlock[] =
-    session && session.blocks.length > 0
-      ? session.blocks
-      : paused
-        ? []
-        : planMission(catalog, progressMap, learner.settings, now, today).blocks.map((b) => ({ ...b, done: false }));
-  const streak = computeStreak(sessions, today, learner.settings);
+  const settings = learner.settings;
+  const theme = settings.theme;
+  const screen = theme.screen ?? "generic";
+  const paused = isPaused(settings, today);
+  const weekend = isWeekend(today);
+  const blocks: SessionBlock[] = todaysBlocks({ learner, catalog, progressMap, sessions, now, today, notes });
+  const kinds = kindProgress(blocks);
+  const streak = computeStreak(sessions, today, settings);
   const ring = weeklyRing(sessions, today);
+  const role = missionRole(sessions, today);
   const due = reviewDueCount(catalog, progressMap, now);
   const base = `/learn/${learner.slug}`;
-  const currency = learner.settings.theme.currency;
+  const currency = theme.currency;
+  const ladder = ladderFor(theme);
 
   const [balance, setBalance] = useState(initialBalance);
   const [storeOpen, setStoreOpen] = useState(false);
 
   const coach = useCoach(learner.slug);
   const nextBlock = blocks.find((b) => !b.done);
-  const doneCount = blocks.filter((b) => b.done).length;
+  const doneCount = kinds.filter((k) => k.done).length;
   function cheer() {
     const note = [
-      `This week: ${ring.done} of ${ring.target} school nights.`,
+      `This week: ${ring.stars} of ${ring.target} stars.`,
       `Streak: ${streak} day${streak === 1 ? "" : "s"}.`,
-      blocks.length > 0 ? `Today: ${doneCount} of ${blocks.length} blocks done.` : paused ? "Vacation mode." : "No mission planned yet.",
-      nextBlock ? `Next up: ${nextBlock.label}.` : blocks.length > 0 ? "Mission complete!" : "",
+      kinds.length > 0 ? `Today: ${doneCount} of ${kinds.length} blocks done.` : paused ? "Vacation mode." : "No mission planned yet.",
+      nextBlock ? `Next up: ${nextBlock.label}.` : kinds.length > 0 ? "Mission complete!" : "",
       due > 0 ? `${due} review${due === 1 ? "" : "s"} due.` : "",
     ]
       .filter(Boolean)
@@ -85,23 +117,60 @@ export default function MissionView({ learner, progressRows, sessions, xpTotal, 
             <h1 className="truncate text-[28px] font-bold tracking-tight text-slate-900">
               Hi, {learner.name}! <span aria-hidden>{KID_EMOJI[learner.slug] ?? "⭐"}</span>
             </h1>
-            <p className="mt-0.5 text-sm font-medium text-slate-400">Mission Control</p>
+            <p className="mt-0.5 text-sm font-medium text-slate-400">{screen === "diamond" ? "Lightning Dash" : screen === "tutu" ? "Sparkle Stage" : "Mission Control"}</p>
             <div className="mt-2 flex items-center gap-2">
               <StreakFlame streak={streak} size="sm" />
               <span className="text-[11px] font-semibold text-slate-400">{paused ? "streak frozen" : "day streak"}</span>
             </div>
           </div>
-          <WeeklyRing ring={ring} size={92} />
+          <WeeklyRing ring={ring} size={92} screen={screen} />
         </div>
 
-        {/* XP + currency */}
-        <div className="mt-5 rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
-          <XpBar xp={xpTotal} />
+        {/* Tonight: the two-line mission, the night's screen, the time-back line */}
+        <div className="mt-4">
+          {paused ? (
+            <div className="rounded-2xl bg-gradient-to-r from-sky-400 to-cyan-500 p-6 text-center text-white shadow-lg shadow-sky-500/20">
+              <p className="text-4xl" aria-hidden>
+                🏖️
+              </p>
+              <p className="mt-2 text-xl font-bold">Vacation mode — see you on {vacationReturnLabel(settings, today)}!</p>
+              <p className="mt-1 text-sm font-medium text-white/85">Your streak is frozen, not lost. No catch-up when you&apos;re back.</p>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+              {role !== "required" && (
+                <p className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-center text-sm font-bold text-emerald-700">
+                  {role === "optional" ? "Friday Free! Four stars are in — tonight is optional." : "Bonus set — your ring is already closed. Only if you want to!"}
+                </p>
+              )}
+              <p className="text-base font-bold text-slate-900">{missionLaunchLine(blocks, weekend)}</p>
+              {theme.timeBack && <p className="mt-1 text-sm font-semibold text-indigo-600">{theme.timeBack}</p>}
+              {kinds.length > 0 && (
+                <div className="mt-4">
+                  <MissionScreen screen={screen} kinds={kinds} />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {!paused && (
+          <div className="mt-4">
+            <MissionCard slug={learner.slug} blocks={blocks} completed={!!session?.completed || (blocks.length > 0 && blocks.every((b) => b.done))} />
+          </div>
+        )}
+
+        {/* Level ladder + points */}
+        <div className="mt-4 rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+          <XpBar xp={xpTotal} ladder={ladder} />
           <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{currency}</p>
               <p className="text-2xl font-bold tabular-nums text-slate-900">
-                <span aria-hidden>{learner.settings.theme.levels === "ballet" ? "✨" : learner.settings.theme.levels === "baseball" ? "⚡" : "🪙"}</span> {balance}
+                <span aria-hidden>{theme.levels === "ballet" ? "✨" : theme.levels === "baseball" ? "⚡" : "🪙"}</span> {balance}
+              </p>
+              <p className="text-[11px] font-medium text-slate-400">
+                {Math.min(weekPoints, POINTS.weeklyCap)} of {POINTS.weeklyCap} this week
               </p>
             </div>
             <button
@@ -114,21 +183,6 @@ export default function MissionView({ learner, progressRows, sessions, xpTotal, 
           </div>
         </div>
 
-        {/* Mission or vacation */}
-        <div className="mt-4">
-          {paused ? (
-            <div className="rounded-2xl bg-gradient-to-r from-sky-400 to-cyan-500 p-6 text-center text-white shadow-lg shadow-sky-500/20">
-              <p className="text-4xl" aria-hidden>
-                🏖️
-              </p>
-              <p className="mt-2 text-xl font-bold">Vacation mode — see you on {vacationReturnLabel(learner.settings.pausedUntil ?? today)}!</p>
-              <p className="mt-1 text-sm font-medium text-white/85">Your streak is frozen, not lost. No catch-up when you&apos;re back.</p>
-            </div>
-          ) : (
-            <MissionCard slug={learner.slug} blocks={blocks} completed={!!session?.completed} />
-          )}
-        </div>
-
         {/* Links */}
         <div className="mt-4 grid grid-cols-2 gap-3">
           <Link
@@ -136,9 +190,9 @@ export default function MissionView({ learner, progressRows, sessions, xpTotal, 
             className="tab-press flex min-h-[72px] flex-col items-center justify-center gap-1 rounded-2xl border border-slate-100 bg-white shadow-sm active:bg-slate-50"
           >
             <span className="text-2xl" aria-hidden>
-              🗺️
+              {screen === "tutu" ? "🐴" : "🗺️"}
             </span>
-            <span className="text-sm font-bold text-slate-800">Skill Map</span>
+            <span className="text-sm font-bold text-slate-800">{screen === "tutu" ? "Skill Map & stable" : screen === "diamond" ? "Skill Map & cards" : "Skill Map"}</span>
             {due > 0 && <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-700">{due} review due</span>}
           </Link>
           <Link

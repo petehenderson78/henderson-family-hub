@@ -11,10 +11,12 @@ import SkillChip, { CHIP_LABEL, type ChipStatus } from "../../components/skill-c
 interface MapViewProps {
   learner: Learner;
   progressRows: SkillProgress[];
+  /** Lily's stable: skill id → pony name */
+  ponies?: Record<string, string>;
   nowIso: string;
 }
 
-export default function MapView({ learner, progressRows, nowIso }: MapViewProps) {
+export default function MapView({ learner, progressRows, ponies = {}, nowIso }: MapViewProps) {
   const router = useRouter();
   const catalog = catalogFor(learner.slug);
   const progressMap = mergeProgress(catalog, progressRows);
@@ -49,6 +51,20 @@ export default function MapView({ learner, progressRows, nowIso }: MapViewProps)
             ⭐ {mastered}/{catalog.length}
           </p>
         </div>
+        {Object.keys(ponies).length > 0 && (
+          <div className="mt-3 rounded-2xl border border-pink-100 bg-pink-50/60 p-3">
+            <p className="text-xs font-bold text-pink-800">🐴 {learner.name}&apos;s stable · {Object.keys(ponies).length} pon{Object.keys(ponies).length === 1 ? "y" : "ies"}</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {catalog
+                .filter((s) => ponies[s.id])
+                .map((s) => (
+                  <span key={s.id} className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-pink-700 shadow-sm">
+                    {ponies[s.id]} <span className="font-medium text-slate-400">· {s.kidTitle}</span>
+                  </span>
+                ))}
+            </div>
+          </div>
+        )}
 
         {/* Legend */}
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -74,13 +90,12 @@ export default function MapView({ learner, progressRows, nowIso }: MapViewProps)
             </h2>
             <div className="grid grid-cols-2 gap-2">
               {g.skills.map((skill) => (
-                <SkillChip
-                  key={skill.id}
-                  skill={skill}
-                  status={chipStatus(skill)}
-                  selected={selectedId === skill.id}
-                  onClick={() => setSelectedId(selectedId === skill.id ? null : skill.id)}
-                />
+                <div key={skill.id} className="relative">
+                  <SkillChip skill={skill} status={chipStatus(skill)} selected={selectedId === skill.id} onClick={() => setSelectedId(selectedId === skill.id ? null : skill.id)} />
+                  {ponies[skill.id] && (
+                    <span className="pointer-events-none absolute -top-1.5 right-1 rounded-full bg-pink-500 px-1.5 py-0.5 text-[9px] font-bold text-white shadow">🐴 {ponies[skill.id]}</span>
+                  )}
+                </div>
               ))}
             </div>
           </section>
@@ -96,6 +111,7 @@ export default function MapView({ learner, progressRows, nowIso }: MapViewProps)
                 <div className="min-w-0">
                   <p className="text-lg font-bold text-slate-900">{selected.kidTitle}</p>
                   <p className="text-xs font-medium text-slate-400">
+                    {ponies[selected.id] ? `🐴 ${ponies[selected.id]} · ` : ""}
                     {selected.title} · Grade {selected.grade} · {selected.standards.join(", ")}
                   </p>
                 </div>
@@ -141,7 +157,7 @@ export default function MapView({ learner, progressRows, nowIso }: MapViewProps)
                       onClick={() => go(selected, "test")}
                       className="flex min-h-[56px] items-center justify-center rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 text-base font-bold text-white shadow-lg shadow-indigo-500/20"
                     >
-                      Test out ⚡
+                      Skip check ⚡
                     </button>
                   ) : (
                     <div className="flex items-center justify-center rounded-2xl bg-slate-50 px-3 text-center text-xs font-medium text-slate-500">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { addNote, NOTE_KINDS, NOTE_KIND_LABEL, parseStandards, type LearnNote, type NoteKind } from "@/lib/learn/store-notes";
+import { addNote, LOGGABLE_NOTE_KINDS, NOTE_KIND_LABEL, parseStandards, type LearnNote, type NoteKind } from "@/lib/learn/store-notes";
 
 export interface LogBookLearner {
   id: string;
@@ -94,7 +94,7 @@ export default function LogBookForm({ learners, today, defaultLearnerId, default
         <label className="block">
           <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Kind</span>
           <select value={kind} onChange={(e) => setKind(e.target.value as NoteKind)} className={field}>
-            {NOTE_KINDS.map((k) => (
+            {LOGGABLE_NOTE_KINDS.map((k) => (
               <option key={k} value={k}>
                 {NOTE_KIND_LABEL[k]}
               </option>

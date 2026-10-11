@@ -16,9 +16,28 @@ import {
   type RewardRow,
   type SessionRow,
 } from "./rows";
-import { addDaysToDateStr, todayInFamilyTz } from "./dates";
+import { addDaysToDateStr, familyMidnightIso, todayInFamilyTz, weekStartDate } from "./dates";
 import type { LearnNote, RewardItem, Redemption } from "./store-notes";
 import type { AttemptSummary } from "./report";
+import { isPointRow, walletFrom, weekPoints, type Wallet } from "./stats";
+
+/**
+ * Read every page of a query: PostgREST caps one response at the project's
+ * max_rows (1000 on Supabase), so whole-history reads (ledger, redemptions,
+ * attempts) must page or their sums silently truncate. `build(from, to)` must
+ * apply a stable order. Returns null when the first page fails.
+ */
+async function selectAllPages<T>(build: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>, max = 50000, page = 1000): Promise<T[] | null> {
+  const out: T[] = [];
+  for (let from = 0; from < max; from += page) {
+    const { data, error } = await build(from, from + page - 1);
+    if (error) return from === 0 ? null : out;
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+    if (rows.length < page) break;
+  }
+  return out;
+}
 
 export async function loadLearnersServer(): Promise<Learner[]> {
   try {
@@ -70,12 +89,17 @@ export async function loadRecentSessionsServer(learnerId: string, days = 60, tod
   }
 }
 
+/** XP for the level ladder: the ledger without point rows ("pt:") and legacy redemptions ("redeem:"). */
 export async function loadXpTotalServer(learnerId: string): Promise<number> {
   try {
     const supabase = await createClient();
-    const { data, error } = await supabase.from("learn_rewards").select("delta").eq("learner_id", learnerId);
-    if (error) return 0;
-    return ((data ?? []) as { delta: number }[]).reduce((sum, r) => sum + (Number(r.delta) || 0), 0);
+    const data = await selectAllPages<{ delta: number; reason: string | null }>((from, to) =>
+      supabase.from("learn_rewards").select("delta, reason").eq("learner_id", learnerId).order("created_at").order("id").range(from, to)
+    );
+    if (!data) return 0;
+    return data
+      .filter((r) => !isPointRow({ reason: r.reason ?? "" }) && !(r.reason ?? "").startsWith("redeem:"))
+      .reduce((sum, r) => sum + (Number(r.delta) || 0), 0);
   } catch {
     return 0;
   }
@@ -97,23 +121,32 @@ export async function loadRewardsSinceServer(learnerId: string, sinceIso: string
   }
 }
 
+/** Ledger rows since local midnight on this family week's Monday (points caps, replay decay, workshops). */
+export async function loadWeekRewardsServer(learnerId: string, today = todayInFamilyTz()): Promise<RewardRecord[]> {
+  return loadRewardsSinceServer(learnerId, familyMidnightIso(weekStartDate(today)));
+}
+
 export interface LearnerBundle {
   learner: Learner;
   progress: SkillProgress[];
   sessions: SessionRecord[];
-  xpTotal: number;
+  /** learn_notes of the last 8 days (Lily's homework rule reads tonight and the previous school night) */
+  notes: LearnNote[];
+  /** this week's ledger rows */
+  weekRewards: RewardRecord[];
 }
 
 /** Everything a kid page needs, in parallel. */
 export async function loadLearnerBundleServer(slug: string, today = todayInFamilyTz()): Promise<LearnerBundle | null> {
   const learner = await loadLearnerBySlugServer(slug);
   if (!learner) return null;
-  const [progress, sessions, xpTotal] = await Promise.all([
+  const [progress, sessions, notes, weekRewards] = await Promise.all([
     loadProgressServer(learner.id),
     loadRecentSessionsServer(learner.id, 60, today),
-    loadXpTotalServer(learner.id),
+    loadNotesServer(learner.id, addDaysToDateStr(today, -7), today),
+    loadWeekRewardsServer(learner.id, today),
   ]);
-  return { learner, progress, sessions, xpTotal };
+  return { learner, progress, sessions, notes, weekRewards };
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +154,7 @@ export async function loadLearnerBundleServer(slug: string, today = todayInFamil
 // above: DB errors → empty data, never a render crash.
 // ---------------------------------------------------------------------------
 
-const NOTE_KINDS = ["book", "homework", "together", "read-aloud", "fluency", "other"] as const;
+const NOTE_KINDS = ["book", "homework", "together", "read-aloud", "fluency", "other", "pony"] as const;
 
 function noteFromRowServer(row: Record<string, unknown>): LearnNote {
   const kind = row.kind;
@@ -203,25 +236,36 @@ export async function loadRedemptionsServer(learnerId: string, limit = 50): Prom
 }
 
 /** Attempt rows for the evidence pack (newest first, capped). Optional columns (help_level, hint_used) are read if present. */
-export async function loadAttemptsServer(learnerId: string, limit = 5000): Promise<AttemptSummary[]> {
+export async function loadAttemptsServer(learnerId: string, limit = 20000): Promise<AttemptSummary[]> {
   try {
     const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("learn_attempts")
-      .select("skill_id, mode, correct, created_at, help_level, hint_used")
-      .eq("learner_id", learnerId)
-      .order("created_at", { ascending: false })
-      .limit(limit);
-    const rows = error
-      ? // Columns from the pending 007 edit may not exist yet → retry with the base columns.
-        (await supabase.from("learn_attempts").select("skill_id, mode, correct, created_at").eq("learner_id", learnerId).order("created_at", { ascending: false }).limit(limit)).data
-      : data;
+    // Paged: one PostgREST response stops at max_rows (1000), which a year of evenings passes in weeks.
+    const full = await selectAllPages<Record<string, unknown>>(
+      (from, to) =>
+        supabase
+          .from("learn_attempts")
+          .select("skill_id, mode, correct, created_at, help_level, hint_used, ms, qtype:question->>type")
+          .eq("learner_id", learnerId)
+          .order("created_at", { ascending: false })
+          .order("id")
+          .range(from, to),
+      limit
+    );
+    const rows =
+      full ??
+      // Columns from the pending 007 edit may not exist yet → retry with the base columns.
+      (await selectAllPages<Record<string, unknown>>(
+        (from, to) => supabase.from("learn_attempts").select("skill_id, mode, correct, created_at").eq("learner_id", learnerId).order("created_at", { ascending: false }).order("id").range(from, to),
+        limit
+      ));
     return ((rows ?? []) as Record<string, unknown>[]).map((row) => ({
       skillId: String(row.skill_id ?? ""),
       mode: typeof row.mode === "string" ? row.mode : "learn",
       correct: row.correct === true,
       helpLevel: typeof row.help_level === "string" ? row.help_level : null,
       hintUsed: typeof row.hint_used === "boolean" ? row.hint_used : null,
+      ms: typeof row.ms === "number" ? row.ms : null,
+      questionType: typeof row.qtype === "string" ? row.qtype : null,
       createdAt: typeof row.created_at === "string" ? row.created_at : "",
     }));
   } catch {
@@ -229,28 +273,52 @@ export async function loadAttemptsServer(learnerId: string, limit = 5000): Promi
   }
 }
 
-export interface LedgerTotals {
-  /** sum of positive deltas — drives the level (redeeming a reward never demotes) */
-  earned: number;
-  /** sum of all deltas — what the kid can spend in the reward store */
-  balance: number;
+export interface WalletTotals extends Wallet {
+  /** points earned this family week (cap 25) */
+  weekPoints: number;
 }
 
-export async function loadLedgerTotalsServer(learnerId: string): Promise<LedgerTotals> {
+const EMPTY_WALLET: WalletTotals = { xp: 0, earned: 0, spent: 0, balance: 0, weekPoints: 0 };
+
+/**
+ * XP (level ladder) and the points wallet: balance = points earned (pt: rows) −
+ * points-era redemptions. Never throws (empty wallet on a DB error).
+ */
+export async function loadWalletServer(learnerId: string, today = todayInFamilyTz()): Promise<WalletTotals> {
   try {
     const supabase = await createClient();
-    const { data, error } = await supabase.from("learn_rewards").select("delta").eq("learner_id", learnerId);
-    if (error) return { earned: 0, balance: 0 };
-    let earned = 0;
-    let balance = 0;
-    for (const r of (data ?? []) as { delta: number }[]) {
-      const d = Number(r.delta) || 0;
-      balance += d;
-      if (d > 0) earned += d;
-    }
-    return { earned, balance };
+    const [ledger, redemptions] = await Promise.all([
+      selectAllPages<RewardRow>((from, to) =>
+        supabase.from("learn_rewards").select("delta, reason, created_at").eq("learner_id", learnerId).order("created_at").order("id").range(from, to)
+      ),
+      selectAllPages<{ cost: number; created_at?: string }>((from, to) =>
+        supabase.from("learn_redemptions").select("cost, created_at").eq("learner_id", learnerId).order("created_at").order("id").range(from, to)
+      ),
+    ]);
+    if (!ledger) return EMPTY_WALLET;
+    const rows = ledger.map(rewardFromRow);
+    const spent = (redemptions ?? []).map((r) => ({ cost: Number(r.cost) || 0, createdAt: r.created_at }));
+    return { ...walletFrom(rows, spent), weekPoints: weekPoints(rows, today) };
   } catch {
-    return { earned: 0, balance: 0 };
+    return EMPTY_WALLET;
+  }
+}
+
+/** Pony names (learn_notes kind 'pony'), newest first. */
+export async function loadPonyNotesServer(learnerId: string): Promise<LearnNote[]> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("learn_notes")
+      .select("*")
+      .eq("learner_id", learnerId)
+      .eq("kind", "pony")
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (error) return [];
+    return ((data ?? []) as Record<string, unknown>[]).map(noteFromRowServer);
+  } catch {
+    return [];
   }
 }
 
@@ -258,8 +326,10 @@ export interface TonightKidBundle {
   learner: Learner;
   progress: SkillProgress[];
   sessions: SessionRecord[];
-  /** today's learn_notes (homework ticks, Together cards, book work) */
+  /** learn_notes of the last 8 days (today's homework ticks, Together cards, books; the homework rule) */
   notes: LearnNote[];
+  /** this week's ledger rows (points, surprise bonus given today) */
+  weekRewards: RewardRecord[];
 }
 
 /** Both kids for the Tonight runner, in parallel. */
@@ -267,12 +337,13 @@ export async function loadTonightBundleServer(today = todayInFamilyTz()): Promis
   const learners = await loadLearnersServer();
   return Promise.all(
     learners.map(async (learner) => {
-      const [progress, sessions, notes] = await Promise.all([
+      const [progress, sessions, notes, weekRewards] = await Promise.all([
         loadProgressServer(learner.id),
         loadRecentSessionsServer(learner.id, 14, today),
-        loadNotesServer(learner.id, today, today),
+        loadNotesServer(learner.id, addDaysToDateStr(today, -7), today),
+        loadWeekRewardsServer(learner.id, today),
       ]);
-      return { learner, progress, sessions, notes };
+      return { learner, progress, sessions, notes, weekRewards };
     })
   );
 }

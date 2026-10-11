@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import type { SkillStatus } from "@/lib/learn/types";
 
@@ -15,7 +16,7 @@ interface SummaryCardProps {
   correct: number;
   total: number;
   xp: number;
-  /** family currency earned this block, e.g. { amount: 1.5, name: "Lightning Bucks" } */
+  /** input points earned this block, e.g. { amount: 2, name: "Lightning Bucks" } */
   currency?: { amount: number; name: string };
   /** streak flame after this block (frozen days never reset it) */
   streak?: { days: number; label: string };
@@ -25,6 +26,8 @@ interface SummaryCardProps {
   secondary?: { label: string; href: string };
   /** extra line under the title (e.g. placement results) */
   note?: string;
+  /** extra content under the mastery changes (e.g. Lily's pony names) */
+  extra?: ReactNode;
 }
 
 const CONFETTI_COLORS = ["#3b82f6", "#6366f1", "#f59e0b", "#10b981", "#ec4899", "#8b5cf6"];
@@ -49,6 +52,7 @@ export default function SummaryCard({
   primary,
   secondary,
   note,
+  extra,
 }: SummaryCardProps) {
   const pct = total > 0 ? Math.round((100 * correct) / total) : 0;
   return (
@@ -93,7 +97,7 @@ export default function SummaryCard({
             <p className="mt-1 text-3xl font-bold">+{xp}</p>
             {currency && currency.amount > 0 && (
               <p className="mt-0.5 text-xs font-semibold text-white/80">
-                = {currency.amount} {currency.name}
+                +{currency.amount} {currency.name}
               </p>
             )}
           </div>
@@ -120,6 +124,8 @@ export default function SummaryCard({
             ))}
           </ul>
         )}
+
+        {extra}
 
         <Link
           href={primary.href}

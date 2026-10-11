@@ -6,11 +6,12 @@
  * Relative imports only, `import type` for types (Node-importable).
  */
 
-import type { Learner, ProgressMap, SessionRecord, Skill, SkillStatus, Subject } from "./types";
+import type { Learner, ProgressMap, Question, SessionRecord, Skill, SkillStatus, Subject } from "./types";
 import type { LearnNote } from "./store-notes";
-import { MASTERY_MIN_ATTEMPTS, TEST_OUT_ITEMS } from "./mastery";
+import { MASTERY_MIN_ATTEMPTS, TEST_OUT_ITEMS, isGuess } from "./mastery";
 import { SUBJECT_LABEL, SUBJECT_ORDER } from "./catalog";
-import { formatDateStr } from "./stats";
+import { formatDateStr, isFinishedBook } from "./stats";
+import { familyDateOfIso } from "./dates";
 
 /** One learn_attempts row, reduced to what the report needs (optional columns read defensively). */
 export interface AttemptSummary {
@@ -20,13 +21,17 @@ export interface AttemptSummary {
   /** 'independent' | 'hint' | 'taught' when the column exists */
   helpLevel?: string | null;
   hintUsed?: boolean | null;
+  /** answer time, for the guess filter (a sub-1.5 s wrong tap is logged but never scored) */
+  ms?: number | null;
+  /** question.type, for the guess filter */
+  questionType?: string | null;
   createdAt: string;
 }
 
 export type MasteryMode = "test-out" | "practiced" | "parent-verified" | "—";
 
 export const MASTERY_MODE_LABEL: Record<MasteryMode, string> = {
-  "test-out": "Test-out (5/5 pretest)",
+  "test-out": "Test-out (skip check ≥ 9/10 or placement probe)",
   practiced: "Practiced to mastery",
   "parent-verified": "Parent-verified",
   "—": "—",
@@ -37,8 +42,9 @@ export interface SkillReportRow {
   status: SkillStatus;
   masteredAt: string | null;
   mode: MasteryMode;
-  /** independent answers only (no hint / not taught) */
+  /** first-try correct answers with no hint / teaching (the engine's window rule) */
   independentCorrect: number;
+  /** every scored learn / skip-check item: a hinted or taught answer counts as an independent miss */
   independentTotal: number;
   reviewCorrect: number;
   reviewTotal: number;
@@ -53,6 +59,17 @@ function isIndependent(a: AttemptSummary): boolean {
   return !a.helpLevel || a.helpLevel === "independent";
 }
 
+/** A logged sub-1.5 s wrong tap on a choice / tap / tiles item: never scored (mastery.ts guess filter). */
+function isLoggedGuess(a: AttemptSummary): boolean {
+  if (typeof a.ms !== "number" || !a.questionType) return false;
+  return isGuess({ correct: a.correct, ms: a.ms, questionType: a.questionType as Question["type"] });
+}
+
+/** YYYY-MM-DD in the family timezone for a timestamp (evening sessions must not land on the next UTC day). */
+export function familyDay(iso: string | null): string {
+  return iso ? familyDateOfIso(iso) : "";
+}
+
 export function buildSkillRows(catalog: Skill[], progressMap: ProgressMap, attempts: AttemptSummary[]): SkillReportRow[] {
   const bySkill = new Map<string, AttemptSummary[]>();
   for (const a of attempts) {
@@ -62,13 +79,14 @@ export function buildSkillRows(catalog: Skill[], progressMap: ProgressMap, attem
   }
   return catalog.map((skill) => {
     const p = progressMap[skill.id];
-    const rows = bySkill.get(skill.id) ?? [];
+    const rows = (bySkill.get(skill.id) ?? []).filter((a) => !isLoggedGuess(a));
     const status: SkillStatus = p?.status ?? "locked";
     const masteredAt = p?.masteredAt ?? null;
     const fromAttempts = rows.length > 0;
 
+    // Learn mode logs ONE row per item: the first answer when it was right, else the hinted retry —
+    // so a hinted / taught row is an independent miss, exactly like the engine's mastery window.
     const learnRows = rows.filter((a) => a.mode !== "review");
-    const independent = learnRows.filter(isIndependent);
     const reviewRows = rows.filter((a) => a.mode === "review");
     const testRows = rows.filter((a) => a.mode === "test");
 
@@ -89,8 +107,8 @@ export function buildSkillRows(catalog: Skill[], progressMap: ProgressMap, attem
       status,
       masteredAt,
       mode,
-      independentCorrect: fromAttempts ? independent.filter((a) => a.correct).length : (p?.correct ?? 0),
-      independentTotal: fromAttempts ? independent.length : (p?.attempts ?? 0),
+      independentCorrect: fromAttempts ? learnRows.filter((a) => a.correct && isIndependent(a)).length : (p?.correct ?? 0),
+      independentTotal: fromAttempts ? learnRows.length : (p?.attempts ?? 0),
       reviewCorrect: reviewRows.filter((a) => a.correct).length,
       reviewTotal: reviewRows.length,
       attempts: fromAttempts ? rows.length : (p?.attempts ?? 0),
@@ -196,7 +214,7 @@ export function placementSummary(learner: Learner, rows: SkillReportRow[], summa
   const practicedCorrect = practiced.reduce((s, r) => s + r.independentCorrect, 0);
   const practicedTotal = practiced.reduce((s, r) => s + r.independentTotal, 0);
   const modeParts: string[] = [];
-  if (testOut) modeParts.push(`${testOut} compacted with a 5-item test-out`);
+  if (testOut) modeParts.push(`${testOut} compacted by a test-out (a 10-item skip check at ≥ 9/10 or a placement probe)`);
   if (practiced.length) {
     const acc = pct(practicedCorrect, practicedTotal);
     modeParts.push(`${practiced.length} practiced to mastery${acc !== null ? ` at ${acc}% independent accuracy` : ""}`);
@@ -211,17 +229,25 @@ export function placementSummary(learner: Learner, rows: SkillReportRow[], summa
   const learning = rows.filter((r) => r.status === "learning").map((r) => r.skill.title);
   if (learning.length) sentences.push(`Currently working on ${joinNames(learning.slice(0, 4))}${learning.length > 4 ? ` and ${learning.length - 4} more` : ""}.`);
 
-  if (notes.length) {
-    const minutes = notes.reduce((s, n) => s + (n.minutes || 0), 0);
-    const books = notes.filter((n) => n.kind === "book").length;
-    const homework = notes.filter((n) => n.kind === "homework").length;
+  const logged = evidenceNotes(notes);
+  if (logged.length) {
+    const minutes = logged.reduce((s, n) => s + (n.minutes || 0), 0);
+    const finished = logged.filter(isFinishedBook).length;
+    const books = logged.filter((n) => n.kind === "book" && !isFinishedBook(n)).length;
+    const homework = logged.filter((n) => n.kind === "homework").length;
     const extra: string[] = [];
+    if (finished) extra.push(`${finished} finished book${finished === 1 ? "" : "s"}`);
     if (books) extra.push(`${books} book-work session${books === 1 ? "" : "s"}`);
     if (homework) extra.push(`${homework} school homework check-in${homework === 1 ? "" : "s"}`);
-    sentences.push(`The parent log holds ${notes.length} entr${notes.length === 1 ? "y" : "ies"} (${minutes} minutes)${extra.length ? ` including ${joinNames(extra)}` : ""}.`);
+    sentences.push(`The parent log holds ${logged.length} entr${logged.length === 1 ? "y" : "ies"} (${minutes} minutes)${extra.length ? ` including ${joinNames(extra)}` : ""}.`);
   }
 
   return sentences.join(" ");
+}
+
+/** Notes that belong in the evidence pack (pony names are Lily's stable, not evidence). */
+export function evidenceNotes(notes: LearnNote[]): LearnNote[] {
+  return notes.filter((n) => n.kind !== "pony");
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +285,7 @@ export function skillRowsToCsv(rows: SkillReportRow[]): string {
       r.skill.grade,
       r.skill.standards.join(" "),
       r.status,
-      r.masteredAt ? r.masteredAt.slice(0, 10) : "",
+      familyDay(r.masteredAt),
       r.mode === "—" ? "" : r.mode,
       r.independentCorrect,
       r.independentTotal,
@@ -267,7 +293,7 @@ export function skillRowsToCsv(rows: SkillReportRow[]): string {
       r.reviewCorrect,
       r.reviewTotal,
       r.attempts,
-      r.lastPracticedAt ? r.lastPracticedAt.slice(0, 10) : "",
+      familyDay(r.lastPracticedAt),
     ]
       .map(csvCell)
       .join(",")
@@ -277,7 +303,7 @@ export function skillRowsToCsv(rows: SkillReportRow[]): string {
 
 export function notesToCsv(notes: LearnNote[]): string {
   const header = ["date", "kind", "subject", "text", "minutes", "score", "total", "standards"];
-  const lines = notes.map((n) =>
+  const lines = evidenceNotes(notes).map((n) =>
     [n.date, n.kind, n.subject ?? "", n.text ?? "", n.minutes, n.score ?? "", n.total ?? "", n.standards.join(" ")].map(csvCell).join(",")
   );
   return [header.join(","), ...lines].join("\r\n");

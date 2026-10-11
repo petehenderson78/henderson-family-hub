@@ -4,15 +4,22 @@
  * store and redemptions. Client components only. Every function throws on a
  * Supabase error so callers can retry/toast.
  *
- * Tables: supabase/migrations/008_learn_notes.sql. snake_case ⇄ camelCase is
- * converted inline here (rows.ts is owned by the engine).
+ * Tables: supabase/migrations/008_learn_notes.sql (+ 009: kind 'pony',
+ * learn_redemptions.client_id and the balance trigger). snake_case ⇄ camelCase
+ * is converted inline here.
  */
 
 import { createClient } from "@/lib/supabase/client";
+import { newClientId } from "./rows";
+import { awardPoints } from "./store";
+import { BOOK_FINISHED_PREFIX } from "./stats";
 
-export type NoteKind = "book" | "homework" | "together" | "read-aloud" | "fluency" | "other";
+export type NoteKind = "book" | "homework" | "together" | "read-aloud" | "fluency" | "other" | "pony";
 
-export const NOTE_KINDS: readonly NoteKind[] = ["book", "homework", "together", "read-aloud", "fluency", "other"];
+export const NOTE_KINDS: readonly NoteKind[] = ["book", "homework", "together", "read-aloud", "fluency", "other", "pony"];
+
+/** Kinds a parent picks in the log form (pony names come from Lily's summary card). */
+export const LOGGABLE_NOTE_KINDS: readonly NoteKind[] = ["book", "homework", "together", "read-aloud", "fluency", "other"];
 
 export const NOTE_KIND_LABEL: Record<NoteKind, string> = {
   book: "Book work",
@@ -21,6 +28,7 @@ export const NOTE_KIND_LABEL: Record<NoteKind, string> = {
   "read-aloud": "Read-aloud",
   fluency: "Fluency check",
   other: "Other",
+  pony: "Pony name",
 };
 
 export interface LearnNote {
@@ -137,7 +145,7 @@ function noteToRow(n: LearnNote): Omit<NoteRow, "id" | "created_at" | "recorded_
     learner_id: n.learnerId,
     date: n.date,
     kind: n.kind,
-    subject: n.subject?.trim() ? n.subject.trim().slice(0, 40) : null,
+    subject: n.subject?.trim() ? n.subject.trim().slice(0, n.kind === "pony" ? 80 : 40) : null,
     text: n.text?.trim() ? n.text.trim().slice(0, 500) : null,
     minutes: Math.max(0, Math.min(600, Math.round(n.minutes || 0))),
     score: typeof n.score === "number" && Number.isFinite(n.score) ? Math.max(0, Math.round(n.score)) : null,
@@ -226,24 +234,49 @@ export async function upsertRewardItem(item: RewardItem): Promise<RewardItem> {
 }
 
 /**
- * Redeem a reward: one learn_redemptions row AND one learn_rewards row with a
- * negative delta (reason "redeem:<itemId>") so the XP ledger stays the single
- * source of truth for the balance. Callers check balance >= cost first.
+ * Redeem a reward: ONE learn_redemptions row (the balance is points earned −
+ * redemptions, so nothing is written to the XP ledger and there is no second
+ * write that could fail half-way). `clientId` makes a retried redemption a
+ * no-op; migration 009's trigger re-checks the balance and the item's price.
+ * Callers check balance >= cost first.
  */
-export async function redeemReward(learnerId: string, item: RewardItem): Promise<Redemption> {
+export async function redeemReward(learnerId: string, item: RewardItem, clientId: string = newClientId()): Promise<Redemption> {
   if (!item.id) throw new Error("redeemReward: item has no id");
   const cost = Math.max(1, Math.round(item.cost));
-  const { data, error } = await client()
-    .from("learn_redemptions")
-    .insert({ learner_id: learnerId, item_id: item.id, cost })
-    .select("*")
-    .single();
+  const row = { learner_id: learnerId, item_id: item.id, cost, client_id: clientId };
+  let { error } = await client().from("learn_redemptions").upsert(row, { onConflict: "client_id", ignoreDuplicates: true });
+  if (error && /client_id/i.test(error.message)) {
+    // Migration 009 not applied yet: plain insert (no retry protection).
+    ({ error } = await client().from("learn_redemptions").insert({ learner_id: learnerId, item_id: item.id, cost }));
+  }
   check(error, "redeemReward");
-  const { error: ledgerError } = await client()
-    .from("learn_rewards")
-    .insert({ learner_id: learnerId, delta: -cost, reason: `redeem:${item.id}` });
-  check(ledgerError, "redeemReward (ledger)");
-  return data ? redemptionFromRow(data as RedemptionRow) : { learnerId, itemId: item.id, cost };
+  return { learnerId, itemId: item.id, cost };
+}
+
+/**
+ * "Finished a book" (design §4: 2 points per book finished and retold): a book
+ * note whose text starts with "Finished:" plus the pt:book row.
+ */
+export async function logFinishedBook(learnerId: string, today: string, title: string): Promise<{ note: LearnNote; points: number }> {
+  const clean = title.trim().slice(0, 200);
+  const note = await addNote({
+    learnerId,
+    date: today,
+    kind: "book",
+    subject: "reading",
+    text: `${BOOK_FINISHED_PREFIX} ${clean || "a book"}`,
+    minutes: 0,
+    score: null,
+    total: null,
+    standards: [],
+  });
+  const points = await awardPoints(learnerId, "book", { today, clientId: newClientId() });
+  return { note, points };
+}
+
+/** Name a mastered skill's pony (Lily's stable): a learn_notes row kind 'pony' (subject = skill id). */
+export async function namePony(learnerId: string, today: string, skillId: string, name: string, standards: string[] = []): Promise<LearnNote> {
+  return addNote({ learnerId, date: today, kind: "pony", subject: skillId, text: name, minutes: 0, score: null, total: null, standards });
 }
 
 export async function loadRedemptions(learnerId: string, limit = 50): Promise<Redemption[]> {

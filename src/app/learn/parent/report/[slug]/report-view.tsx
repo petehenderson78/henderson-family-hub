@@ -4,7 +4,7 @@ import Link from "next/link";
 import type { Learner } from "@/lib/learn/types";
 import { formatDateStr } from "@/lib/learn/stats";
 import { NOTE_KIND_LABEL, type LearnNote } from "@/lib/learn/store-notes";
-import { groupRowsBySubject, MASTERY_MODE_LABEL, notesToCsv, pct, skillRowsToCsv, type SessionsSummary, type SkillReportRow } from "@/lib/learn/report";
+import { evidenceNotes, familyDay, groupRowsBySubject, MASTERY_MODE_LABEL, notesToCsv, pct, skillRowsToCsv, type SessionsSummary, type SkillReportRow } from "@/lib/learn/report";
 
 interface ReportViewProps {
   learner: Learner;
@@ -34,11 +34,14 @@ function downloadCsv(filename: string, csv: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** A timestamp as a family-timezone date (an evening session is not dated the next UTC day). */
 function day(iso: string | null): string {
-  return iso ? formatDateStr(iso.slice(0, 10), true) : "—";
+  const d = familyDay(iso);
+  return d ? formatDateStr(d, true) : "—";
 }
 
-export default function ReportView({ learner, rows, summary, paragraph, notes, today }: ReportViewProps) {
+export default function ReportView({ learner, rows, summary, paragraph, notes: allNotes, today }: ReportViewProps) {
+  const notes = evidenceNotes(allNotes);
   const groups = groupRowsBySubject(rows);
   const mastered = rows.filter((r) => r.status === "mastered").length;
   const stamp = today.replace(/-/g, "");
@@ -70,8 +73,8 @@ export default function ReportView({ learner, rows, summary, paragraph, notes, t
             {learner.name} · grade {learner.grade}
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Generated {formatDateStr(today, true)} · Henderson Family Hub · Learn module. Standards are NJSLS / CCSS codes. &ldquo;Independent&rdquo; counts answers given without a hint or
-            teaching.
+            Generated {formatDateStr(today, true)} · Henderson Family Hub · Learn module. Standards are NJSLS / CCSS codes. &ldquo;Independent&rdquo; is first-try correct
+            answers without a hint or teaching, out of every scored item (a hinted or taught answer counts as a miss).
           </p>
         </header>
 
@@ -219,7 +222,8 @@ export default function ReportView({ learner, rows, summary, paragraph, notes, t
         </section>
 
         <p className="mt-8 text-center text-[11px] text-slate-400 print:mt-4">
-          Mastery rule: ≥ 8 attempts, ≥ 90% over the last 10, streak ≥ 3 — independent answers only. Reviews spaced at 1 / 3 / 7 / 14 / 30 / 60 days.
+          Mastery rule: ≥ 10 attempts, ≥ 90% over the last 10, streak ≥ 3 — independent answers only. Test-out: a 10-item skip check at ≥ 9/10, or a placement
+          probe (5/5, or 9/10 over two). Reviews spaced at 1 / 3 / 7 / 14 / 30 / 60 days.
         </p>
       </div>
     </div>

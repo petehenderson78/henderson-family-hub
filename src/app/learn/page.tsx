@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import { loadLearnersServer, loadLedgerTotalsServer, loadRecentSessionsServer } from "@/lib/learn/server";
+import { loadLearnersServer, loadRecentSessionsServer, loadWalletServer } from "@/lib/learn/server";
 import { todayInFamilyTz } from "@/lib/learn/dates";
 import { computeStreak, isPaused, kidSlugForEmail, sessionForDate, todayStatus } from "@/lib/learn/stats";
 import LearnHome, { type KidSummary } from "./learn-home";
@@ -25,7 +25,7 @@ export default async function LearnPage() {
   const learners = await loadLearnersServer();
   const kids: KidSummary[] = await Promise.all(
     learners.map(async (learner) => {
-      const [sessions, ledger] = await Promise.all([loadRecentSessionsServer(learner.id, 60, today), loadLedgerTotalsServer(learner.id)]);
+      const [sessions, wallet] = await Promise.all([loadRecentSessionsServer(learner.id, 60, today), loadWalletServer(learner.id, today)]);
       const t = todayStatus(sessionForDate(sessions, today));
       return {
         learner,
@@ -33,7 +33,7 @@ export default async function LearnPage() {
         blocksDone: t.blocksDone,
         blocksTotal: t.blocksTotal,
         streak: computeStreak(sessions, today, learner.settings),
-        xp: ledger.earned,
+        xp: wallet.xp,
         paused: isPaused(learner.settings, today),
       };
     })

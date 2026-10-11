@@ -98,3 +98,49 @@ export function parseClock(hhmm: string): number | null {
 export function dateInRange(dateStr: string, from: string, to: string): boolean {
   return dateStr >= from && dateStr <= to;
 }
+
+/** The family-timezone date (YYYY-MM-DD) of an ISO instant; "" for a missing / bad value. */
+export function familyDateOfIso(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : todayInFamilyTz(d);
+}
+
+/**
+ * The UTC instant of local midnight (family timezone) that starts `dateStr`, as an ISO string.
+ * America/New_York is UTC-4 or UTC-5 and DST changes at 2 am, so midnight always exists.
+ */
+export function familyMidnightIso(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  for (const offsetHours of [4, 5, 3, 6]) {
+    const t = Date.UTC(y, (m || 1) - 1, d || 1, offsetHours);
+    if (todayInFamilyTz(new Date(t)) === dateStr && todayInFamilyTz(new Date(t - 60_000)) !== dateStr) return new Date(t).toISOString();
+  }
+  return new Date(Date.UTC(y, (m || 1) - 1, d || 1, 5)).toISOString();
+}
+
+/** Monday (YYYY-MM-DD) of the family week containing `dateStr`. */
+export function weekStartDate(dateStr: string): string {
+  return addDaysToDateStr(dateStr, -weekdayIndexMon(dateStr));
+}
+
+/** The previous school day (Mon → the Friday before). */
+export function previousSchoolDay(dateStr: string): string {
+  let d = addDaysToDateStr(dateStr, -1);
+  while (isWeekend(d)) d = addDaysToDateStr(d, -1);
+  return d;
+}
+
+/** The last Friday of its month (design §3.7: the 12-item mix-up). */
+export function isLastFridayOfMonth(dateStr: string): boolean {
+  return isFriday(dateStr) && addDaysToDateStr(dateStr, 7).slice(0, 7) !== dateStr.slice(0, 7);
+}
+
+/** 1230 → "8:30 pm" (minutes since midnight). */
+export function formatClockMinutes(total: number): string {
+  const h = Math.floor(total / 60) % 24;
+  const m = total % 60;
+  const suffix = h >= 12 ? "pm" : "am";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${suffix}`;
+}

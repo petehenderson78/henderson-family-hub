@@ -168,11 +168,32 @@ export interface SkillProgress {
   needsHelp?: boolean;
   /** the prompt the child was stuck on (for the parent, next to parentTip) */
   helpNote?: string | null;
-  /** mastered via a 5/5 test-out rather than practice. Default false. */
+  /** mastered via a test-out (skip check >= 9/10 or a placement probe) rather than practice. Default false. */
   testOut?: boolean;
 }
 
 export type ProgressMap = Record<string, SkillProgress>;
+
+/** Planned light weeks (design §14.8): review-only missions, or "off" (= vacation: no mission, streak frozen). */
+export interface LightWeek {
+  from: string;
+  to: string;
+  mode: "review-only" | "off";
+}
+
+/** Mission Control screen: Cole's diamond (bases), Lily's tutu (petals), or a plain row. */
+export type ThemeScreen = "diamond" | "tutu" | "generic";
+
+export interface LearnerTheme {
+  /** currency name, e.g. "Lightning Bucks" */
+  currency: string;
+  levels: "baseball" | "ballet" | "generic";
+  /** level ladder, one name per 500 XP (Appendix A) */
+  ladder?: string[];
+  /** the nightly zero-cost time-back line, e.g. "Done by 7:45 = catch in the yard" */
+  timeBack?: string;
+  screen?: ThemeScreen;
+}
 
 export interface LearnerSettings {
   dailyMinutes: number;
@@ -181,16 +202,20 @@ export interface LearnerSettings {
   /** Weekend block minutes (family norm 30 / 30 / 45). */
   weekend: { math: number; reading: number; brain: number };
   targetGrade: { math: number; reading: number; reasoning: number };
-  /** XP per family-currency unit */
+  /** Legacy (XP per currency unit). The currency is now input points (learn_rewards "pt:" rows); unused. */
   rewardRate: number;
-  /** Latest time a block may START, "HH:MM" 24h in the family timezone (family rule: 20:30). */
+  /** Every block must FINISH by this time, "HH:MM" 24h in the family timezone (family rule: 20:30); a block that cannot is skipped, no debt. */
   stopBy: string;
-  /** YYYY-MM-DD; while today <= pausedUntil, missions are paused and the streak is frozen. */
+  /** YYYY-MM-DD; while pausedFrom <= day <= pausedUntil, missions are paused and the streak is frozen. */
   pausedUntil: string | null;
+  /** YYYY-MM-DD the current "Pause until" started (set by the settings editor). Missing on legacy rows. */
+  pausedFrom?: string | null;
   /** Planned vacations (inclusive YYYY-MM-DD ranges); same effect as pausedUntil. */
   vacations?: { from: string; to: string }[];
-  /** What the child sees: currency name and level theme. */
-  theme: { currency: string; levels: "baseball" | "ballet" | "generic" };
+  /** Planned light weeks (review-only or off). */
+  lightWeeks?: LightWeek[];
+  /** What the child sees: currency name, level ladder, time-back line, Mission Control screen. */
+  theme: LearnerTheme;
   /** Speak prompts automatically (early readers). */
   autoSpeak: boolean;
 }
@@ -217,11 +242,11 @@ export interface MissionBlock {
   minutes: number;
   /** kid-facing label, e.g. "Math · Times Tables" */
   label: string;
-  /** true when the skill is "ready" and can be compacted with a 5-item pretest */
+  /** true when the skill is "ready" and can be compacted with a 10-item skip check (weekends) */
   offerTestOut?: boolean;
   /** Interleaved review (Friday "mix-up"): the block rotates through these skills; skillId is the first. */
   skillIds?: string[];
-  /** Fixed item count for set-based blocks (review set = 4, mix-up = 6, test-out = 5). */
+  /** Fixed item count for set-based blocks (review set = 4, mix-up = 8 / 12, skip check = 10). */
   items?: number;
 }
 
@@ -238,6 +263,8 @@ export interface SessionBlock extends MissionBlock {
   minutes_spent?: number;
   /** the stuck rule ended this block early (still counts as done — no backlog) */
   stuck?: boolean;
+  /** input points earned when this block finished (pt: rows) */
+  points?: number;
 }
 
 export interface SessionRecord {
@@ -295,5 +322,6 @@ export interface Workshop {
   minutes: number;
   blurb: string;
   steps: string[];
-  xp: number;
+  /** input points paid when marked done with a logged Show (design §4: 3) */
+  points: number;
 }

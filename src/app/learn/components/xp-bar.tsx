@@ -5,10 +5,12 @@ import { levelFor } from "@/lib/learn/mastery";
 interface XpBarProps {
   xp: number;
   compact?: boolean;
+  /** the learner's level ladder (a level every 500 XP) */
+  ladder?: readonly string[];
 }
 
-export default function XpBar({ xp, compact = false }: XpBarProps) {
-  const lv = levelFor(xp);
+export default function XpBar({ xp, compact = false, ladder }: XpBarProps) {
+  const lv = levelFor(xp, ladder);
   const pct = Math.round(lv.progress * 100);
   return (
     <div>
@@ -31,7 +33,7 @@ export default function XpBar({ xp, compact = false }: XpBarProps) {
       </div>
       {!compact && (
         <p className="mt-1.5 text-[11px] font-medium text-slate-400">
-          {lv.xpNext - xp} XP to level {lv.level + 1}
+          {lv.xpNext - xp} XP to the next level · {xp} XP so far
         </p>
       )}
     </div>

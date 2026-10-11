@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Learner } from "@/lib/learn/types";
 import { formatClockLabel, minutesUntil, type TodayStatus } from "@/lib/learn/stats";
-import { levelFor } from "@/lib/learn/mastery";
+import { ladderFor, levelFor } from "@/lib/learn/mastery";
 import ProgressRing from "./components/progress-ring";
 import StreakFlame from "./components/streak-flame";
 
@@ -36,9 +36,10 @@ interface LearnHomeProps {
 /** Parent landing: Tonight first, then each kid, then the parent view. (Kid logins never reach this page.) */
 export default function LearnHome({ kids, nowIso }: LearnHomeProps) {
   const stopBy = kids.reduce<string | null>((e, k) => (e === null || k.learner.settings.stopBy < e ? k.learner.settings.stopBy : e), null) ?? "20:30";
-  const [nowMs, setNowMs] = useState(() => (nowIso ? new Date(nowIso).getTime() : 0));
+  // Minute resolution: the page re-renders at most once a minute.
+  const [nowMs, setNowMs] = useState(() => (nowIso ? Math.floor(new Date(nowIso).getTime() / 60_000) * 60_000 : 0));
   useEffect(() => {
-    const tick = () => setNowMs(Date.now());
+    const tick = () => setNowMs(Math.floor(Date.now() / 60_000) * 60_000);
     const t = window.setTimeout(tick, 0);
     const id = window.setInterval(tick, 30_000);
     return () => {
@@ -76,7 +77,7 @@ export default function LearnHome({ kids, nowIso }: LearnHomeProps) {
               ))}
             </div>
             <p className="mt-3 text-xs font-semibold text-white/80" suppressHydrationWarning>
-              {minutesLeft === null ? `Blocks must start by ${formatClockLabel(stopBy)}` : minutesLeft > 0 ? `${minutesLeft} min until the ${formatClockLabel(stopBy)} stop · rotation, scripts, homework, log` : "Past the stop time — tomorrow is a fresh start"}
+              {minutesLeft === null ? `Blocks must finish by ${formatClockLabel(stopBy)}` : minutesLeft > 0 ? `Blocks must finish by ${formatClockLabel(stopBy)} · ${minutesLeft} min left · rotation, scripts, homework, log` : "Past the stop time — tomorrow is a fresh start"}
             </p>
           </Link>
         )}
@@ -89,7 +90,7 @@ export default function LearnHome({ kids, nowIso }: LearnHomeProps) {
         ) : (
           <div className="mt-4 space-y-3">
             {kids.map((k) => {
-              const lv = levelFor(k.xp);
+              const lv = levelFor(k.xp, ladderFor(k.learner.settings.theme));
               const ringValue = k.status === "done" ? 1 : k.blocksTotal > 0 ? k.blocksDone / k.blocksTotal : 0;
               return (
                 <Link
@@ -105,7 +106,7 @@ export default function LearnHome({ kids, nowIso }: LearnHomeProps) {
                   <div className="min-w-0 flex-1">
                     <p className="text-xl font-bold text-slate-900">{k.learner.name}</p>
                     <p className="text-xs font-semibold text-indigo-600">
-                      Level {lv.level} · {lv.name}
+                      {lv.name}
                     </p>
                     <p className={`mt-1 text-sm font-medium ${k.status === "done" ? "text-emerald-600" : "text-slate-400"}`}>
                       {k.paused ? "🏖️ Vacation mode" : (

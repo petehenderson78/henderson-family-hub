@@ -24,7 +24,10 @@ export default async function TonightPage() {
 
   const today = todayInFamilyTz();
   const bundles = await loadTonightBundleServer(today);
-  const kids: TonightKid[] = bundles.map((b) => ({ learner: b.learner, progressRows: b.progress, sessions: b.sessions, notes: b.notes }));
+  // Youngest first: the rotation opens each block with Lily (design §2.1).
+  const kids: TonightKid[] = bundles
+    .map((b) => ({ learner: b.learner, progressRows: b.progress, sessions: b.sessions, notes: b.notes, weekRewards: b.weekRewards }))
+    .sort((a, b) => a.learner.grade - b.learner.grade);
 
   return <TonightView kids={kids} today={today} nowIso={new Date().toISOString()} coachEnabled={coachEnabled()} />;
 }

@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import type { Question } from "@/lib/learn/types";
 import Keypad from "./keypad";
-import SpeakButton from "./speak-button";
+import SpeakButton, { speakNow, speechSupported } from "./speak-button";
+import { useMounted } from "./use-mounted";
 import TilesInput from "./tiles-input";
 import TapGrid from "./tap-grid";
 
@@ -42,6 +43,34 @@ function isWordLabel(label: string | undefined): label is string {
 }
 
 /**
+ * "Hear this option": a full-height 48px column on the option's right edge,
+ * divided from the answer area, so a near miss of the speaker can never submit
+ * the option (the answer button keeps its own pr-14 dead zone underneath).
+ */
+function OptionSpeaker({ text }: { text: string }) {
+  const mounted = useMounted();
+  const [speaking, setSpeaking] = useState(false);
+  if (!mounted || !speechSupported()) return null;
+  return (
+    <button
+      type="button"
+      aria-label={`Hear "${text}"`}
+      aria-pressed={speaking}
+      onClick={(e) => {
+        e.stopPropagation();
+        setSpeaking(true);
+        if (!speakNow(text, () => setSpeaking(false))) setSpeaking(false);
+      }}
+      className={`absolute inset-y-0 right-0 flex w-12 items-center justify-center rounded-r-2xl border-l-2 border-slate-100 text-lg ${
+        speaking ? "bg-indigo-100 text-indigo-700" : "bg-slate-50/80 text-slate-600"
+      }`}
+    >
+      🔊
+    </button>
+  );
+}
+
+/**
  * Renders one question. Mount with `key={questionNumber}` (and a different key
  * for the retry) so its input state resets for each new attempt.
  */
@@ -67,6 +96,9 @@ export default function QuestionCard({
   const [modelShown, setModelShown] = useState(false);
   const locked = !!answered;
   const speakText = question.display?.speak ?? question.prompt;
+  // A 4×4 grid is a sudoku: thicker lines between rows 2/3 and columns 2/3 mark the 2×2 boxes.
+  const grid = question.display?.grid;
+  const sudoku4 = !!grid && grid.length === 4 && grid.every((row) => row.length === 4);
 
   // Hardware keyboard support for numeric questions (phones use the keypad).
   useEffect(() => {
@@ -138,12 +170,17 @@ export default function QuestionCard({
         </p>
       )}
       {question.display?.grid && (
-        <table className="mx-auto mt-3 border-collapse">
+        <table className={`mx-auto mt-3 border-collapse ${sudoku4 ? "border-[3px] border-slate-500" : ""}`}>
           <tbody>
             {question.display.grid.map((row, r) => (
               <tr key={r}>
                 {row.map((cell, c) => (
-                  <td key={c} className="border border-slate-200 px-3 py-2 text-center text-lg font-semibold text-slate-800">
+                  <td
+                    key={c}
+                    className={`border border-slate-200 px-3 py-2 text-center text-lg font-semibold text-slate-800 ${
+                      sudoku4 && c === 1 ? "border-r-[3px] border-r-slate-500" : ""
+                    } ${sudoku4 && r === 1 ? "border-b-[3px] border-b-slate-500" : ""}`}
+                  >
                     {cell}
                   </td>
                 ))}
@@ -302,7 +339,7 @@ export default function QuestionCard({
                   : picked
                     ? "border-rose-300 bg-rose-50 animate-shake"
                     : "border-slate-100 bg-white opacity-60";
-              const speakable = isWordLabel(opt.label);
+              const speakable = isWordLabel(opt.label) && !locked;
               return (
                 <div key={i} className="relative">
                   <button
@@ -310,7 +347,7 @@ export default function QuestionCard({
                     disabled={locked}
                     onClick={() => onSubmit(String(i))}
                     className={`tab-press flex min-h-[72px] w-full flex-col items-center justify-center gap-1 rounded-2xl border-2 p-3 shadow-sm ${tone} ${
-                      speakable ? "pr-11" : ""
+                      speakable ? "pr-14" : ""
                     }`}
                   >
                     {opt.svg && (
@@ -324,11 +361,7 @@ export default function QuestionCard({
                     {opt.emoji && <span className="text-4xl leading-none">{opt.emoji}</span>}
                     {opt.label && <span className={`font-bold text-slate-900 break-words ${bigText ? "text-2xl" : "text-xl"}`}>{opt.label}</span>}
                   </button>
-                  {speakable && !locked && (
-                    <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
-                      <SpeakButton text={opt.label ?? ""} small />
-                    </div>
-                  )}
+                  {speakable && <OptionSpeaker text={opt.label ?? ""} />}
                 </div>
               );
             })}

@@ -5,33 +5,57 @@ import Link from "next/link";
 import type { Learner, Workshop } from "@/lib/learn/types";
 import { WORKSHOPS, featuredWorkshops } from "@/lib/learn/workshops";
 import { isoWeekNumber } from "@/lib/learn/dates";
-import { addReward } from "@/lib/learn/store";
+import { POINTS } from "@/lib/learn/stats";
+import { awardPoints, newClientId } from "@/lib/learn/store";
+import { addNote } from "@/lib/learn/store-notes";
+import HoldToConfirm from "../../components/hold-to-confirm";
 
 interface WorkshopsViewProps {
   learner: Learner;
   doneThisWeek: string[];
+  /** points earned this week (cap 25) */
+  weekPoints: number;
   today: string;
+  /** signed in as the kid: marking done needs a parent's hold */
+  isKid: boolean;
 }
 
-export default function WorkshopsView({ learner, doneThisWeek, today }: WorkshopsViewProps) {
+export default function WorkshopsView({ learner, doneThisWeek, weekPoints, today, isKid }: WorkshopsViewProps) {
   const [done, setDone] = useState<Set<string>>(() => new Set(doneThisWeek));
   const [openId, setOpenId] = useState<string | null>(null);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const [shows, setShows] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [paid, setPaid] = useState<Record<string, number>>({});
   const [justDone, setJustDone] = useState<string | null>(null);
+  const currency = learner.settings.theme.currency;
 
   const featured = featuredWorkshops(isoWeekNumber(today));
   const featuredIds = new Set(featured.map((w) => w.id));
   const rest = WORKSHOPS.filter((w) => !featuredIds.has(w.id));
   const base = `/learn/${learner.slug}`;
 
+  /** Done = every step checked AND the Show logged (a learn_notes row), then pt:workshop (3, within the weekly cap). */
   async function markDone(w: Workshop) {
-    if (done.has(w.id) || saving) return;
+    const show = (shows[w.id] ?? "").trim();
+    if (done.has(w.id) || saving || !show) return;
     setSaving(w.id);
     setError(null);
     try {
-      await addReward(learner.id, w.xp, `workshop:${w.id}`);
+      await addNote({
+        learnerId: learner.id,
+        date: today,
+        kind: "other",
+        subject: "workshop",
+        text: `Workshop Show — ${w.title}: ${show}`,
+        minutes: w.minutes,
+        score: null,
+        total: null,
+        standards: [],
+      });
+      const points = await awardPoints(learner.id, "workshop", { today, detail: w.id, clientId: newClientId() });
+      setPaid((p) => ({ ...p, [w.id]: points }));
       setDone((d) => new Set(d).add(w.id));
       setJustDone(w.id);
     } catch {
@@ -41,13 +65,17 @@ export default function WorkshopsView({ learner, doneThisWeek, today }: Workshop
     }
   }
 
-  const Card = ({ w, featuredCard }: { w: Workshop; featuredCard: boolean }) => {
+  // A render function, not a nested component: a component defined in render remounts on every
+  // keystroke and the Show input would lose focus.
+  function renderCard(w: Workshop, featuredCard: boolean) {
     const isOpen = openId === w.id;
     const isDone = done.has(w.id);
     const stepKey = (i: number) => `${w.id}:${i}`;
     const allChecked = w.steps.every((_, i) => checked[stepKey(i)]);
+    const show = shows[w.id] ?? "";
+    const ready = allChecked && show.trim().length > 0 && saving !== w.id;
     return (
-      <div className={`rounded-2xl border bg-white shadow-sm ${isDone ? "border-emerald-200" : featuredCard ? "border-indigo-100" : "border-slate-100"}`}>
+      <div key={w.id} className={`rounded-2xl border bg-white shadow-sm ${isDone ? "border-emerald-200" : featuredCard ? "border-indigo-100" : "border-slate-100"}`}>
         <button type="button" onClick={() => setOpenId(isOpen ? null : w.id)} className="flex min-h-[72px] w-full items-center gap-3 p-4 text-left">
           <span className={`text-3xl ${justDone === w.id ? "animate-pop" : ""}`} aria-hidden>
             {isDone ? "✅" : w.emoji}
@@ -55,7 +83,7 @@ export default function WorkshopsView({ learner, doneThisWeek, today }: Workshop
           <span className="min-w-0 flex-1">
             <span className="block truncate text-base font-bold text-slate-900">{w.title}</span>
             <span className="block text-xs font-medium text-slate-400">
-              {w.minutes} min · +{w.xp} XP{isDone ? " · done this week" : ""}
+              {w.minutes} min · +{w.points} {currency} with a Show{isDone ? " · done this week" : ""}
             </span>
           </span>
           <span className="text-slate-300">{isOpen ? "▴" : "▾"}</span>
@@ -80,22 +108,46 @@ export default function WorkshopsView({ learner, doneThisWeek, today }: Workshop
               ))}
             </ul>
             {isDone ? (
-              <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-center text-sm font-bold text-emerald-700">Done! +{w.xp} XP 🎉</p>
+              <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-center text-sm font-bold text-emerald-700">
+                Done! {paid[w.id] !== undefined ? (paid[w.id] > 0 ? `+${paid[w.id]} ${currency} 🎉` : "This week's points are all in — great work 🎉") : "🎉"}
+              </p>
             ) : (
-              <button
-                type="button"
-                disabled={!allChecked || saving === w.id}
-                onClick={() => markDone(w)}
-                className="mt-3 flex min-h-[56px] w-full items-center justify-center rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-base font-bold text-white shadow-lg shadow-blue-500/20 disabled:opacity-40"
-              >
-                {saving === w.id ? "Saving…" : allChecked ? `Mark done · +${w.xp} XP` : "Check off every step first"}
-              </button>
+              <div className="mt-3">
+                <label className="block">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Grown-up: the Show (who saw it, what was shown)</span>
+                  <input
+                    value={show}
+                    maxLength={200}
+                    onChange={(e) => setShows((m) => ({ ...m, [w.id]: e.target.value }))}
+                    placeholder="Showed Grandpa the bridge holding 41 coins"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 outline-none focus:border-indigo-400"
+                  />
+                </label>
+                {isKid ? (
+                  <div className="mt-2">
+                    <HoldToConfirm
+                      label={ready ? "Parent: hold to mark done" : !allChecked ? "Check off every step first" : "Log the Show first"}
+                      disabled={!ready}
+                      onConfirm={() => void markDone(w)}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!ready}
+                    onClick={() => void markDone(w)}
+                    className="mt-2 flex min-h-[56px] w-full items-center justify-center rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-base font-bold text-white shadow-lg shadow-blue-500/20 disabled:opacity-40"
+                  >
+                    {saving === w.id ? "Saving…" : !allChecked ? "Check off every step first" : !show.trim() ? "Log the Show first" : `Mark done · +${w.points} ${currency}`}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
       </div>
     );
-  };
+  }
 
   return (
     <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
@@ -104,24 +156,23 @@ export default function WorkshopsView({ learner, doneThisWeek, today }: Workshop
           ← Mission Control
         </Link>
         <h1 className="mt-3 text-[28px] font-bold tracking-tight text-slate-900">Workshops 🛠️</h1>
-        <p className="mt-1.5 text-sm font-medium text-slate-400">Afternoon projects. Pick one, do every step, earn XP.</p>
+        <p className="mt-1.5 text-sm font-medium text-slate-400">
+          The weekend brain block. Pick one, do every step, then show someone what you made. {Math.min(weekPoints, POINTS.weeklyCap)} of {POINTS.weeklyCap}{" "}
+          {currency} this week.
+        </p>
 
         {error && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm font-semibold text-amber-800">{error}</p>}
 
         <h2 className="mt-7 mb-3 text-base font-bold text-slate-900">This week&apos;s picks</h2>
         <div className="space-y-3">
-          {featured.map((w) => (
-            <Card key={w.id} w={w} featuredCard />
-          ))}
+          {featured.map((w) => renderCard(w, true))}
         </div>
 
         {rest.length > 0 && (
           <>
             <h2 className="mt-8 mb-3 text-base font-bold text-slate-900">More workshops</h2>
             <div className="space-y-3">
-              {rest.map((w) => (
-                <Card key={w.id} w={w} featuredCard={false} />
-              ))}
+              {rest.map((w) => renderCard(w, false))}
             </div>
           </>
         )}

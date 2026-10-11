@@ -10,6 +10,7 @@ import type {
   PracticeMode,
   ProgressMap,
   Question,
+  RewardRecord,
   SessionBlock,
   SessionRecord,
   Skill,
@@ -25,13 +26,13 @@ import {
   MIN_BLOCK_ITEMS,
   PLACEMENT_MAX_FAILS,
   TEST_OUT_ITEMS,
-  XP,
   applyResult,
   applyReviewSet,
+  applySkipCheck,
   applyTestOut,
+  blockXp,
   canStartBlock,
   countsAsIndependent,
-  currencyFor,
   deriveStatuses,
   isGuess,
   isPaused,
@@ -39,17 +40,36 @@ import {
   isStuck,
   markNeedsHelp,
   mergeProgress,
+  needsSkipCheckFollowUp,
   placementPlan,
-  planMission,
+  placementProbeResult,
   questionTargetFor,
-  reviewSetPassed,
+  replayFactor,
   sessionStatusFor,
+  shouldFilterGuess,
+  skipCheckBand,
   streakFromSessions,
   xpFor,
+  type SkipCheckBand,
 } from "@/lib/learn/mastery";
 import { answerText, gradeAnswer } from "@/lib/learn/grade";
-import { sessionForDate } from "@/lib/learn/stats";
-import { addReward, logAttempt, newClientId, saveProgress, upsertSession } from "@/lib/learn/store";
+import {
+  POINTS,
+  pointReason,
+  pointsAllowed,
+  ponyNameChoices,
+  ponyNames,
+  resolveBlockIndex,
+  sessionForDate,
+  setsDoneToday,
+  startedOnTime,
+  todaysBlocks,
+  vacationReturnLabel,
+  xpReason,
+  type PointKind,
+} from "@/lib/learn/stats";
+import { addReward, awardPoints, logAttempt, newClientId, saveProgress, upsertSession } from "@/lib/learn/store";
+import { namePony, type LearnNote } from "@/lib/learn/store-notes";
 import type { CoachQuestion } from "@/lib/learn/coach-types";
 import QuestionCard from "../../components/question-card";
 import FeedbackBanner from "../../components/feedback-banner";
@@ -64,6 +84,10 @@ interface PlayViewProps {
   learner: Learner;
   progressRows: SkillProgress[];
   sessions: SessionRecord[];
+  /** learn_notes of the last days (Lily's homework rule; pony names) */
+  notes: LearnNote[];
+  /** this week's ledger rows (points caps, replay decay) */
+  weekRewards: RewardRecord[];
   today: string;
   nowIso: string;
   blockParam?: string;
@@ -84,7 +108,7 @@ interface Run {
   skills: Skill[];
   mode: PracticeMode;
   minutes: number;
-  /** fixed item count (review set 4, mix-up 6) */
+  /** fixed item count (review set 4, mix-up 8 / 12) */
   items?: number;
   /** index into `blocks` when running the mission, null for a free skill run / placement */
   blockIndex: number | null;
@@ -97,6 +121,12 @@ interface Run {
   /** placement sprint queue (catalog order) */
   placement: Skill[];
   subject?: Subject;
+}
+
+interface RunMessage {
+  message: string;
+  emoji: string;
+  body?: string;
 }
 
 type Phase = "paused" | "blocked" | "offer" | "intro" | "question" | "feedback" | "stuck" | "summary";
@@ -114,11 +144,10 @@ interface Answered {
   helpLevel: HelpLevel;
   hintUsed: boolean;
   ms: number;
+  /** XP shown on the banner (after replay decay) */
   xp: number;
   /** the independent (first) answer on this item was wrong */
   firstTryWrong: boolean;
-  /** streak after this answer (for the XP preview) */
-  streakPreview: number;
 }
 
 interface ItemResult {
@@ -128,26 +157,33 @@ interface ItemResult {
   independent: boolean;
   helpLevel: HelpLevel;
   firstMiss: boolean;
-  guess: boolean;
+  /** item XP before replay decay (1 / 0.5 / 0) */
   xp: number;
   prompt: string;
 }
 
 interface Finished {
   xp: number;
+  points: number;
   correct: number;
   total: number;
   changes: MasteryChange[];
+  /** skills that became mastered in this run (Lily names a pony for each) */
+  newlyMastered: Skill[];
   missionComplete: boolean;
   nextBlockIndex: number;
   streak: number;
   note?: string;
   testedOut?: boolean;
-  reviewPassed?: boolean;
+  band?: SkipCheckBand;
 }
 
 /** Session records written this page-load, so the next block never starts from stale server props. */
 const sessionCache = new Map<string, SessionRecord>();
+/** Sets finished this page-load per learner:date:skill (replay decay before the ledger catches up). */
+const localSets = new Map<string, number>();
+/** Point rows written this page-load (so the caps hold before the server props refresh). */
+const localPointRows: RewardRecord[] = [];
 
 const SUBJECTS: Subject[] = ["math", "reading", "phonics", "reasoning", "writing"];
 
@@ -160,6 +196,16 @@ function kindForSubject(subject: Subject): BlockKind {
 function parseMode(m: string | undefined): PracticeMode | null {
   return m === "learn" || m === "review" || m === "test" ? m : null;
 }
+
+/** Kid-facing mode words (never "test" / "pretest" on a kid screen). */
+const MODE_WORD: Record<PracticeMode, string> = { learn: "learn", review: "review", test: "skip check" };
+
+const BAND_NOTE: Record<SkipCheckBand, string> = {
+  "test-out": "You skipped ahead — this one is mastered!",
+  "quick-fill": "So close! A quick fill next time, then another skip check.",
+  "hole-fill": "So close! We'll fill the gaps, then another skip check.",
+  learn: "Now we learn this one step by step.",
+};
 
 const COACH_TEXT_MAX = 2000;
 
@@ -199,7 +245,7 @@ function withoutOptionLabels(text: string, options: Option[]): string {
  * Text AUTO-spoken for a prompt: never the answer (generators keep display.speak
  * answer-free; the selfcheck asserts it), never a whole passage (the passage has
  * its own "Read it to me" button, so only the short question is spoken) and never
- * the option labels of a choice item (each word option has its own small speaker).
+ * the option labels of a choice item (each word option has its own speaker).
  */
 function promptSpeech(q: Question): string {
   if (q.display?.passage) return q.prompt;
@@ -208,8 +254,8 @@ function promptSpeech(q: Question): string {
   return withoutOptionLabels(text, q.options) || q.prompt;
 }
 
-function buildRun(props: PlayViewProps): Run | string {
-  const { learner, progressRows, sessions, today, nowIso, blockParam, skillParam, modeParam, subjectParam } = props;
+function buildRun(props: PlayViewProps): Run | RunMessage {
+  const { learner, progressRows, sessions, notes, today, nowIso, blockParam, skillParam, modeParam, subjectParam } = props;
   const catalog = catalogFor(learner.slug);
   const progressMap = mergeProgress(catalog, progressRows);
   const now = new Date(nowIso);
@@ -218,16 +264,13 @@ function buildRun(props: PlayViewProps): Run | string {
   const fromServer = sessionForDate(sessions, today);
   const doneCount = (s: SessionRecord | null | undefined) => s?.blocks.filter((b) => b.done).length ?? -1;
   const session = cached && doneCount(cached) >= doneCount(fromServer) ? cached : fromServer;
-
-  const blocks: SessionBlock[] =
-    session && session.blocks.length > 0
-      ? session.blocks
-      : planMission(catalog, progressMap, learner.settings, now, today).blocks.map((b) => ({ ...b, done: false }));
+  const sessionsNow = session ? [...sessions.filter((s) => s.date !== today), session] : sessions;
+  const blocks: SessionBlock[] = todaysBlocks({ learner, catalog, progressMap, sessions: sessionsNow, now, today, notes });
 
   if (modeParam === "placement") {
     const subject = SUBJECTS.includes(subjectParam as Subject) ? (subjectParam as Subject) : "math";
     const placement = placementPlan(catalog, subject, progressMap);
-    if (placement.length === 0) return `Nothing to place in ${subject} right now — every skill is mastered or has no test-out.`;
+    if (placement.length === 0) return { emoji: "🧭", message: `Nothing to place in ${subject} right now — every skill is mastered or can't be skipped.` };
     return {
       kind: "placement",
       skills: [placement[0]],
@@ -246,20 +289,27 @@ function buildRun(props: PlayViewProps): Run | string {
 
   if (skillParam) {
     const skill = catalog.find((s) => s.id === skillParam);
-    if (!skill) return `"${skillParam}" is not on ${learner.name}'s skill map.`;
+    if (!skill) return { emoji: "🧭", message: `"${skillParam}" is not on ${learner.name}'s skill map.` };
     const progress = progressMap[skill.id];
     const mode = parseMode(modeParam) ?? (progress.status === "mastered" ? "review" : "learn");
     const minutes = learner.settings.blocks[kindForSubject(skill.subject)] || skill.estMinutes;
     return { kind: "skill", skills: [skill], mode, minutes, blockIndex: null, offerTestOut: false, blocks, session, progressMap, catalog, placement: [] };
   }
 
-  if (blocks.length === 0) return "No mission blocks yet — the skill catalog is still being loaded.";
-  const parsed = Number.parseInt(blockParam ?? "0", 10);
-  const idx = Math.min(blocks.length - 1, Math.max(0, Number.isFinite(parsed) ? parsed : 0));
+  if (blocks.length === 0) {
+    if (isPaused(learner.settings, today)) {
+      return { emoji: "🏖️", message: "Vacation mode", body: `Missions are paused — see you on ${vacationReturnLabel(learner.settings, today)}. Your streak is safe.` };
+    }
+    return { emoji: "🧭", message: "No mission blocks yet — the skill catalog is still being loaded." };
+  }
+  // A finished block is never replayed from history / a reload (it would pay XP, points and minutes twice).
+  const { index: idx, state } = resolveBlockIndex(blocks, blockParam);
+  if (state === "done") return { emoji: "✅", message: "This block is already done today.", body: "Head back for the next one." };
+  if (state === "complete") return { emoji: "🌟", message: "Today's mission is complete!", body: "Nothing carries over — see you next time." };
   const block = blocks[idx];
   const ids = block.skillIds && block.skillIds.length > 0 ? block.skillIds : [block.skillId];
   const skills = ids.map((id) => catalog.find((s) => s.id === id)).filter((s): s is Skill => !!s);
-  if (skills.length === 0) return `Skill "${block.skillId}" is no longer in the catalog. Head back to Mission Control.`;
+  if (skills.length === 0) return { emoji: "🧭", message: `Skill "${block.skillId}" is no longer in the catalog. Head back to Mission Control.` };
   const progress = progressMap[skills[0].id];
   return {
     kind: "block",
@@ -268,7 +318,7 @@ function buildRun(props: PlayViewProps): Run | string {
     minutes: block.minutes,
     items: block.items,
     blockIndex: idx,
-    offerTestOut: !!block.offerTestOut && block.mode === "learn" && progress.status === "ready" && skills.length === 1,
+    offerTestOut: !!block.offerTestOut && block.mode === "learn" && (progress.status === "ready" || needsSkipCheckFollowUp(progress)) && skills.length === 1,
     blocks,
     session,
     progressMap,
@@ -360,8 +410,8 @@ export default function PlayView(props: PlayViewProps) {
   const backHref = returnParam === "tonight" ? "/learn/tonight" : `/learn/${learner.slug}`;
   const backLabel = returnParam === "tonight" ? "Back to Tonight" : "Back to Mission Control";
 
-  if (typeof run === "string") {
-    return <MessageCard emoji="🧭" title={run} href={backHref} label={backLabel} />;
+  if ("message" in run) {
+    return <MessageCard emoji={run.emoji} title={run.message} body={run.body} href={backHref} label={backLabel} />;
   }
 
   // The player reads sessionStorage (per-play seed counter) and the clock, so it mounts client-side only.
@@ -385,6 +435,8 @@ export default function PlayView(props: PlayViewProps) {
       run={run}
       learner={learner}
       sessions={props.sessions}
+      notes={props.notes}
+      weekRewards={props.weekRewards}
       today={today}
       coachEnabled={coachEnabled}
       backHref={backHref}
@@ -399,6 +451,8 @@ interface PlayerProps {
   run: Run;
   learner: Learner;
   sessions: SessionRecord[];
+  notes: LearnNote[];
+  weekRewards: RewardRecord[];
   today: string;
   coachEnabled: boolean;
   backHref: string;
@@ -407,7 +461,7 @@ interface PlayerProps {
   forceIntro: boolean;
 }
 
-function Player({ run, learner, sessions, today, coachEnabled, backHref, backLabel, returnParam, forceIntro }: PlayerProps) {
+function Player({ run, learner, sessions, notes, weekRewards, today, coachEnabled, backHref, backLabel, returnParam, forceIntro }: PlayerProps) {
   const settings = learner.settings;
   const autoSpeak = settings.autoSpeak;
   const early = learner.grade <= 2;
@@ -418,6 +472,12 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
     Object.fromEntries([...run.skills, ...run.placement].map((s) => [s.id, run.progressMap[s.id]?.status ?? "ready"]))
   );
   const [startedAt] = useState(() => new Date());
+  // Replay decay: sets of this skill already finished today (ledger + this page-load).
+  const setKey = `${learner.id}:${today}:${isMixup ? "mixup" : primarySkill.id}`;
+  const [setsBefore] = useState(() =>
+    isPlacement || isMixup ? 0 : Math.max(setsDoneToday(weekRewards, primarySkill.id, today), localSets.get(setKey) ?? 0)
+  );
+  const factor = replayFactor(setsBefore);
 
   // params.attempt counts from the attempts the skill had when the block started (stable for the whole block).
   const makeItem = useCallback(
@@ -428,8 +488,13 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
 
   // --- initial phase ---------------------------------------------------------
   const introLines = primarySkill.intro ?? [];
+  // The Learn-it card opens a skill's first session, a quick / hole fill after a skip check, or on request.
   const introApplies =
-    !isPlacement && !isMixup && run.mode === "learn" && introLines.length > 0 && (forceIntro || (run.progressMap[primarySkill.id]?.attempts ?? 0) === 0);
+    !isPlacement &&
+    !isMixup &&
+    run.mode === "learn" &&
+    introLines.length > 0 &&
+    (forceIntro || (run.progressMap[primarySkill.id]?.attempts ?? 0) === 0 || needsSkipCheckFollowUp(run.progressMap[primarySkill.id]));
   const initialPhase: Phase = isPaused(settings, today)
     ? "paused"
     : !canStartBlock(startedAt, settings.stopBy, run.minutes)
@@ -447,11 +512,11 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
   const [item, setItem] = useState<Item | null>(() =>
     initialPhase === "question" ? makeItemFor(learner.slug, today, primarySkill, run.mode, null, run.progressMap[primarySkill.id]?.attempts ?? 0) : null
   );
-  const [answered, setAnswered] = useState<Answered | null>(null);
+  const [answered, setAnswered] = useState<(Answered & { forced?: boolean }) | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [hintUsed, setHintUsed] = useState(false);
   const [showIntro, setShowIntro] = useState(false);
-  const [xpRun, setXpRun] = useState(0);
+  const [slowDown, setSlowDown] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [finished, setFinished] = useState<Finished | null>(null);
   const [pendingWrites, setPendingWrites] = useState(0);
@@ -459,11 +524,16 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
   // placement sprint
   const [sprintIndex, setSprintIndex] = useState(0);
   const [sprintFails, setSprintFails] = useState(0);
-  const [sprintLog, setSprintLog] = useState<{ skill: Skill; passed: boolean; correct: number }[]>([]);
+  const [sprintLog, setSprintLog] = useState<{ skill: Skill; passed: boolean; correct: number; total: number; xp: number }[]>([]);
+  /** 5, or 10 once a probe came back 4/5 (the pair must reach 9/10) */
+  const [probeTarget, setProbeTarget] = useState(TEST_OUT_ITEMS);
 
   const startRef = useRef(0);
   const questionStartRef = useRef(0);
   const failedRef = useRef<Array<() => Promise<unknown>>>([]);
+  const guessStreakRef = useRef(0);
+  /** set by every in-gesture speak, so the arrival effect never re-speaks over it */
+  const spokenFirstRef = useRef(false);
 
   const currentSkill = item?.skill ?? (isPlacement ? run.placement[sprintIndex] : primarySkill);
 
@@ -491,9 +561,10 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
     [coachAsk, item]
   );
 
-  const target = isPlacement ? TEST_OUT_ITEMS : questionTargetFor(mode, run.minutes, run.items);
+  const target = isPlacement ? probeTarget : questionTargetFor(mode, run.minutes, run.items);
   const limitSeconds = run.minutes * 60;
-  const timeUp = !isPlacement && elapsed >= limitSeconds;
+  // Only a learn block ends by the clock; review sets, mix-ups and skip checks run their fixed count.
+  const timeUp = !isPlacement && mode === "learn" && elapsed >= limitSeconds;
 
   // Block timer (soft): ticks once a second while practicing.
   useEffect(() => {
@@ -510,9 +581,13 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
     questionStartRef.current = Date.now();
   }, [item]);
 
-  // The first prompt of a block arrives by navigation (no tap on this page): try to speak it once.
-  // Later prompts are spoken inside the advancing tap (iOS needs the gesture).
-  const spokenFirstRef = useRef(false);
+  /** Speak inside the current tap (iOS needs the gesture) and mark the first prompt as spoken. */
+  const say = useCallback((text: string) => {
+    spokenFirstRef.current = true;
+    speakNow(text);
+  }, []);
+
+  // The first prompt of a block that arrives by navigation (no tap on this page yet): try to speak it once.
   useEffect(() => {
     if (spokenFirstRef.current || !autoSpeak || !item || phase !== "question") return;
     spokenFirstRef.current = true;
@@ -530,6 +605,26 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
       .finally(() => setPendingWrites((n) => Math.max(0, n - 1)));
   }, []);
 
+  // Progress writes for one skill must land in order: the last item's per-item save and the
+  // block's final fold (review set, skip check, stuck flag) used to race, and the stale one could
+  // win (losing needs_help or the new interval). Saves run one at a time and always send the
+  // latest state for the skill, so a retried write can never overwrite a newer one.
+  const latestProgressRef = useRef<Record<string, SkillProgress>>({});
+  const progressChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const saveSkill = useCallback(
+    (p: SkillProgress) => {
+      latestProgressRef.current[p.skillId] = p;
+      const id = p.skillId;
+      persist(() => {
+        const run = () => saveProgress(learner.id, latestProgressRef.current[id]);
+        const next = progressChainRef.current.then(run, run);
+        progressChainRef.current = next.catch(() => undefined);
+        return next;
+      });
+    },
+    [persist, learner.id]
+  );
+
   const retryFailed = useCallback(() => {
     const queue = failedRef.current;
     failedRef.current = [];
@@ -541,7 +636,7 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
   const beginItems = useCallback(
     (m: PracticeMode, skill: Skill) => {
       const first = makeItem(skill, m, null);
-      if (autoSpeak) speakNow(promptSpeech(first.question));
+      if (autoSpeak) say(promptSpeech(first.question));
       setMode(m);
       setItem(first);
       setAnswered(null);
@@ -549,7 +644,7 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
       setHintUsed(false);
       setPhase("question");
     },
-    [makeItem, autoSpeak]
+    [makeItem, autoSpeak, say]
   );
 
   const submit = useCallback(
@@ -559,34 +654,62 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
       const correct = correctOverride ?? gradeAnswer(q, raw);
       const ms = Date.now() - (questionStartRef.current || Date.now());
       const selfChecked = q.type === "text" && !!q.selfCheck;
+      const fastWrong = !retrying && isGuess({ correct, ms, questionType: q.type });
+
+      // Guess filter: a sub-1.5 s wrong tap is logged, never scored, and a fresh item takes its slot,
+      // so it cannot cost the retry, the window, a review set or a skip check. After a few in a row
+      // the next fast answer counts (no endless re-serving).
+      if (shouldFilterGuess({ correct, ms, questionType: q.type }, retrying, guessStreakRef.current)) {
+        guessStreakRef.current += 1;
+        const attempt = {
+          learnerId: learner.id,
+          skillId: item.skill.id,
+          mode,
+          question: q,
+          answer: raw,
+          correct: false,
+          ms,
+          seed: item.seed,
+          hintUsed: false,
+          helpLevel: "independent" as const,
+          clientId: newClientId(),
+        };
+        persist(() => logAttempt(attempt));
+        const replacement = makeItem(item.skill, mode, q);
+        if (autoSpeak) say(`Take your time. ${promptSpeech(replacement.question)}`);
+        setItem(replacement);
+        setHintUsed(false);
+        setSlowDown(true);
+        return;
+      }
+      guessStreakRef.current = 0;
+      setSlowDown(false);
 
       // Learn mode: a miss earns a hint and ONE retry (help_level "hint" if it then lands).
       if (!correct && mode === "learn" && !retrying && !selfChecked && !isMixup) {
-        if (autoSpeak) speakNow(`Not yet. Here's a hint. ${q.hint}`);
+        if (autoSpeak) say(`Not yet. Here's a hint. ${q.hint}`);
         setRetrying(true);
         setHintUsed(true);
         return;
       }
 
       const helpLevel: HelpLevel = correct && hintUsed ? "hint" : "independent";
-      const progress = progressMap[item.skill.id];
-      const preview = mode === "test" ? progress : applyResult(progress, { correct, helpLevel, ms, questionType: q.type }, new Date(), mode);
-      const xp = xpFor(correct, preview.streak, mode, helpLevel);
-      if (autoSpeak) speakNow(correct ? (helpLevel === "independent" ? "Yes! " : "You got it, with a hint. ") + q.explain : `Not yet. Here's the idea. ${q.explain}`);
-      setAnswered({ raw, correct, helpLevel, hintUsed, ms, xp, firstTryWrong: retrying, streakPreview: preview.streak });
+      const xp = xpFor(correct, helpLevel) * (isPlacement ? 1 : factor);
+      if (autoSpeak) say(correct ? (helpLevel === "independent" ? "Yes! " : "You got it, with a hint. ") + q.explain : `Not yet. Here's the idea. ${q.explain}`);
+      setAnswered({ raw, correct, helpLevel, hintUsed, ms, xp, firstTryWrong: retrying, forced: fastWrong });
       setPhase("feedback");
     },
-    [phase, item, mode, retrying, hintUsed, progressMap, autoSpeak, isMixup]
+    [phase, item, mode, retrying, hintUsed, autoSpeak, isMixup, isPlacement, factor, learner.id, persist, makeItem, say]
   );
 
   const markTaught = useCallback(() => {
-    setAnswered((a) => (a ? { ...a, helpLevel: "taught", xp: xpFor(a.correct, a.streakPreview, mode, "taught") } : a));
-  }, [mode]);
+    setAnswered((a) => (a ? { ...a, helpLevel: "taught", xp: xpFor(a.correct, "taught") * factor } : a));
+  }, [factor]);
 
-  /** Write the day's session row (mission runs only) and return it. */
+  /** Write the day's session row (mission runs only) and return it. A block that is already done is never written twice. */
   const writeSession = useCallback(
     (blockPatch: Partial<SessionBlock>, minutesSpent: number, xp: number): SessionRecord | null => {
-      if (run.blockIndex === null) return null;
+      if (run.blockIndex === null || run.blocks[run.blockIndex]?.done) return null;
       const blocks = run.blocks.map((b, i) => (i === run.blockIndex ? { ...b, ...blockPatch } : b));
       const status = sessionStatusFor(blocks);
       const session: SessionRecord = {
@@ -622,118 +745,161 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
     [initialStatuses]
   );
 
+  /** Award input points for a finished set; returns what the caps allow (the write re-checks them). */
+  const award = useCallback(
+    (kind: PointKind, detail?: string): number => {
+      const local = localPointRows.filter((r) => r.learnerId === learner.id && !weekRewards.some((w) => w.clientId === r.clientId));
+      const allowed = pointsAllowed([...weekRewards, ...local], kind, POINTS[kind], today);
+      if (allowed <= 0) return 0;
+      const clientId = newClientId();
+      localPointRows.push({ learnerId: learner.id, delta: allowed, reason: pointReason(kind, detail), clientId, createdAt: new Date().toISOString() });
+      persist(() => awardPoints(learner.id, kind, { today, detail, clientId }));
+      return allowed;
+    },
+    [learner.id, weekRewards, today, persist]
+  );
+
   /** End a block or free run (not placement). */
   const finish = useCallback(
-    (allResults: ItemResult[], map: ProgressMap, xpSoFar: number, stuck: boolean) => {
+    (allResults: ItemResult[], map: ProgressMap, stuck: boolean) => {
       const now = new Date();
-      let bonus = 0;
       let nextMap = map;
       let testedOut = false;
-      let reviewPassed: boolean | undefined;
+      let band: SkipCheckBand | undefined;
+      let reviewWasDue = false;
+      const flags = allResults.map((r) => r.independent);
 
       if (!isMixup) {
         const skill = primarySkill;
         const prev = map[skill.id];
         if (mode === "test") {
-          const final = applyTestOut(prev, allResults.map((r) => r.correct), now);
+          // Skip check: 10 items, independent answers only (a parent-helped answer never passes it).
+          band = skipCheckBand(flags, skill.subject);
+          const final = applySkipCheck(prev, flags, now, skill.subject);
           testedOut = final.status === "mastered";
-          if (testedOut) bonus += XP.mastery;
           nextMap = { ...map, [skill.id]: final };
-          persist(() => saveProgress(learner.id, final));
+          saveSkill(final);
         } else if (mode === "review" && prev.status === "mastered") {
-          const wasDue = isReviewDue(run.progressMap[skill.id], startedAt);
-          const final = applyReviewSet(prev, allResults.map((r) => r.independent), now, wasDue);
-          reviewPassed = reviewSetPassed(allResults.map((r) => r.independent));
-          if (reviewPassed) bonus += XP.reviewComplete;
+          reviewWasDue = isReviewDue(run.progressMap[skill.id], startedAt);
+          const final = applyReviewSet(prev, flags, now, reviewWasDue);
           nextMap = { ...map, [skill.id]: final };
-          persist(() => saveProgress(learner.id, final));
+          saveSkill(final);
         }
         if (stuck) {
-          bonus += XP.effort;
           const last = allResults[allResults.length - 1];
           const flagged = markNeedsHelp(nextMap[skill.id], last?.prompt ?? skill.title);
           nextMap = { ...nextMap, [skill.id]: flagged };
-          persist(() => saveProgress(learner.id, flagged));
+          saveSkill(flagged);
         }
-      } else {
-        const independent = allResults.filter((r) => r.independent).length;
-        if (allResults.length > 0 && independent >= Math.ceil(allResults.length / 2)) bonus += XP.reviewComplete;
       }
 
-      const totalXp = xpSoFar + bonus;
+      const totalXp = blockXp(
+        allResults.reduce((s, r) => s + r.xp, 0),
+        setsBefore,
+        stuck
+      );
+      localSets.set(setKey, setsBefore + 1);
       const correctCount = allResults.filter((r) => r.correct).length;
       const minutesSpent = Math.max(1, Math.round(elapsed / 60));
+
+      // Input points (design §4): a closed kind ("base"), starting on time, a completed review set.
+      let points = 0;
+      const blockIdx = run.blockIndex;
+      const missionBlock = blockIdx !== null && !run.blocks[blockIdx].done ? run.blocks[blockIdx] : null;
+      if (missionBlock && blockIdx !== null) {
+        const kindClosed = run.blocks.every((b, i) => i === blockIdx || b.kind !== missionBlock.kind || b.done);
+        if (kindClosed) points += award("block", missionBlock.kind);
+        if (!run.blocks.some((b) => b.done) && startedOnTime(startedAt)) points += award("ontime");
+      }
+      if (mode === "review" && (missionBlock || reviewWasDue)) points += award("review", isMixup ? "mixup" : primarySkill.id);
+
       const session = writeSession(
-        { mode, done: true, correct: correctCount, total: allResults.length, xp: totalXp, minutes_spent: minutesSpent, stuck: stuck || undefined },
+        {
+          mode,
+          done: true,
+          correct: correctCount,
+          total: allResults.length,
+          xp: totalXp,
+          minutes_spent: minutesSpent,
+          stuck: stuck || undefined,
+          points: points || undefined,
+        },
         minutesSpent,
         totalXp
       );
       if (totalXp > 0) {
         const clientId = newClientId();
-        persist(() => addReward(learner.id, totalXp, `${mode}:${primarySkill.id}`, clientId));
+        persist(() => addReward(learner.id, totalXp, xpReason(isMixup ? "mixup" : mode, primarySkill.id), clientId));
       }
 
       const blocks = session?.blocks ?? run.blocks;
       setProgressMap(nextMap);
-      setXpRun(totalXp);
       setFinished({
         xp: totalXp,
+        points,
         correct: correctCount,
         total: allResults.length,
         changes: changesFor(nextMap, run.skills),
+        newlyMastered: run.skills.filter((s) => initialStatuses[s.id] !== "mastered" && nextMap[s.id]?.status === "mastered"),
         missionComplete: !!session?.completed,
         nextBlockIndex: run.blockIndex === null ? -1 : blocks.findIndex((b) => !b.done),
         streak: streakAfter(session),
         testedOut,
-        reviewPassed,
+        band,
+        note: band ? BAND_NOTE[band] : undefined,
       });
       setPhase(stuck ? "stuck" : "summary");
     },
-    [isMixup, primarySkill, mode, persist, learner.id, run, elapsed, writeSession, changesFor, streakAfter, startedAt]
+    [isMixup, primarySkill, mode, persist, saveSkill, learner.id, run, elapsed, writeSession, changesFor, streakAfter, startedAt, setsBefore, setKey, award, initialStatuses]
   );
 
-  /** Placement sprint: fold one finished test-out, then continue or stop. */
+  /** Placement sprint: fold one finished probe (5 items, or the 10 of a pair), then continue or stop. */
   const finishSprintSkill = useCallback(
-    (skillResults: ItemResult[], map: ProgressMap, xpSoFar: number) => {
+    (skillResults: ItemResult[], map: ProgressMap) => {
       const now = new Date();
       const skill = run.placement[sprintIndex];
       const wasLocked = map[skill.id]?.status === "locked";
-      const folded = applyTestOut(map[skill.id], skillResults.map((r) => r.correct), now);
+      const folded = applyTestOut(
+        map[skill.id],
+        skillResults.map((r) => r.independent),
+        now
+      );
       const passed = folded.status === "mastered";
       // A still-locked skill that fails keeps its window but stays locked (its prereq is not mastered).
       const final: SkillProgress = !passed && wasLocked ? { ...folded, status: "locked" } : folded;
       const correct = skillResults.filter((r) => r.correct).length;
       // Re-derive ready/locked so a pass unlocks the next skill in the queue.
       const nextMap = deriveStatuses(run.catalog, { ...map, [skill.id]: final });
-      const gained = skillResults.reduce((s, r) => s + r.xp, 0) + (passed ? XP.mastery : 0);
-      persist(() => saveProgress(learner.id, final));
+      const gained = Math.round(skillResults.reduce((s, r) => s + r.xp, 0));
+      saveSkill(final);
       if (gained > 0) {
         const clientId = newClientId();
-        persist(() => addReward(learner.id, gained, `placement:${skill.id}`, clientId));
+        persist(() => addReward(learner.id, gained, xpReason("placement", skill.id), clientId));
       }
       const fails = passed ? 0 : sprintFails + 1;
-      const log = [...sprintLog, { skill, passed, correct }];
+      const log = [...sprintLog, { skill, passed, correct, total: skillResults.length, xp: gained }];
       const nextIndex = sprintIndex + 1;
-      const totalXp = xpSoFar + (passed ? XP.mastery : 0);
       setProgressMap(nextMap);
       setSprintLog(log);
       setSprintFails(fails);
-      setXpRun(totalXp);
+      setProbeTarget(TEST_OUT_ITEMS);
 
       if (fails >= PLACEMENT_MAX_FAILS || nextIndex >= run.placement.length) {
-        const mastered = log.filter((l) => l.passed).map((l) => l.skill.kidTitle);
+        const placed = log.filter((l) => l.passed);
         setFinished({
-          xp: totalXp,
+          xp: log.reduce((s, l) => s + l.xp, 0),
+          points: 0,
           correct: log.reduce((s, l) => s + l.correct, 0),
-          total: log.length * TEST_OUT_ITEMS,
+          total: log.reduce((s, l) => s + l.total, 0),
           changes: changesFor(nextMap, log.map((l) => l.skill)),
+          newlyMastered: placed.map((l) => l.skill),
           missionComplete: false,
           nextBlockIndex: -1,
           streak: streakAfter(null),
           note:
-            mastered.length > 0
-              ? `Placed past ${mastered.length} skill${mastered.length === 1 ? "" : "s"}: ${mastered.join(", ")}.`
-              : "Nothing tested out this time — the next skills will be learned step by step.",
+            placed.length > 0
+              ? `Placed past ${placed.length} skill${placed.length === 1 ? "" : "s"}: ${placed.map((l) => l.skill.kidTitle).join(", ")}.`
+              : "Nothing skipped this time — the next skills will be learned step by step.",
         });
         setResults([]);
         setPhase("summary");
@@ -742,14 +908,14 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
       setSprintIndex(nextIndex);
       setResults([]);
       const first = makeItem(run.placement[nextIndex], "test", null);
-      if (autoSpeak) speakNow(promptSpeech(first.question));
+      if (autoSpeak) say(promptSpeech(first.question));
       setItem(first);
       setAnswered(null);
       setRetrying(false);
       setHintUsed(false);
       setPhase("question");
     },
-    [run.placement, run.catalog, sprintIndex, sprintFails, sprintLog, persist, learner.id, changesFor, streakAfter, makeItem, autoSpeak]
+    [run.placement, run.catalog, sprintIndex, sprintFails, sprintLog, persist, saveSkill, learner.id, changesFor, streakAfter, makeItem, autoSpeak, say]
   );
 
   /** The tap that advances: commits the item, logs it, and speaks the next prompt inside the same gesture. */
@@ -758,14 +924,12 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
     const now = new Date();
     const q = item.question;
     const skill = item.skill;
-    const input = { correct: answered.correct, helpLevel: answered.helpLevel, ms: answered.ms, questionType: q.type };
+    // A fast answer that got past the guess filter (after GUESS_STREAK_LIMIT taps) counts: no ms → no guess.
+    const input = { correct: answered.correct, helpLevel: answered.helpLevel, ms: answered.forced ? undefined : answered.ms, questionType: q.type };
     const prev = progressMap[skill.id];
     const next = mode === "test" ? prev : applyResult(prev, input, now, mode);
-    let gained = answered.xp;
-    if (mode !== "test" && prev.status !== "mastered" && next.status === "mastered") gained += XP.mastery;
     const nextMap = mode === "test" ? progressMap : { ...progressMap, [skill.id]: next };
 
-    const clientId = newClientId();
     const attempt = {
       learnerId: learner.id,
       skillId: skill.id,
@@ -777,10 +941,10 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
       seed: item.seed,
       hintUsed: answered.hintUsed,
       helpLevel: answered.helpLevel,
-      clientId,
+      clientId: newClientId(),
     };
     persist(() => logAttempt(attempt));
-    if (mode !== "test") persist(() => saveProgress(learner.id, next));
+    if (mode !== "test") saveSkill(next);
 
     const result: ItemResult = {
       skillId: skill.id,
@@ -788,37 +952,39 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
       independent: countsAsIndependent(input),
       helpLevel: answered.helpLevel,
       firstMiss: answered.firstTryWrong || !answered.correct,
-      guess: isGuess(input),
-      xp: gained,
+      xp: xpFor(answered.correct, answered.helpLevel),
       prompt: q.prompt,
     };
     const allResults = [...results, result];
-    const xpSoFar = xpRun + gained;
     setProgressMap(nextMap);
     setResults(allResults);
-    setXpRun(xpSoFar);
 
     if (isPlacement) {
-      if (allResults.length >= TEST_OUT_ITEMS) {
-        finishSprintSkill(allResults, nextMap, xpSoFar);
-        return;
+      if (allResults.length >= probeTarget) {
+        const verdict = placementProbeResult(allResults.map((r) => r.independent));
+        if (verdict === "second-set") {
+          setProbeTarget(TEST_OUT_ITEMS * 2);
+        } else {
+          finishSprintSkill(allResults, nextMap);
+          return;
+        }
       }
     } else {
       const stuck = mode === "learn" && !isMixup && isStuck(allResults.map((r) => r.firstMiss));
       if (stuck) {
-        finish(allResults, nextMap, xpSoFar, true);
+        finish(allResults, nextMap, true);
         return;
       }
       const n = allResults.length;
       if (n >= target || (timeUp && n >= MIN_BLOCK_ITEMS)) {
-        finish(allResults, nextMap, xpSoFar, false);
+        finish(allResults, nextMap, false);
         return;
       }
     }
 
     const nextSkill = isPlacement ? skill : run.skills[allResults.length % run.skills.length];
     const nextItem = makeItem(nextSkill, mode, q);
-    if (autoSpeak) speakNow(promptSpeech(nextItem.question));
+    if (autoSpeak) say(promptSpeech(nextItem.question));
     setItem(nextItem);
     setAnswered(null);
     setRetrying(false);
@@ -832,10 +998,11 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
     mode,
     learner.id,
     persist,
+    saveSkill,
     results,
-    xpRun,
     isPlacement,
     isMixup,
+    probeTarget,
     target,
     timeUp,
     finish,
@@ -843,6 +1010,7 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
     run.skills,
     makeItem,
     autoSpeak,
+    say,
   ]);
 
   // --- render ----------------------------------------------------------------
@@ -854,7 +1022,7 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
       <MessageCard
         emoji="🏖️"
         title="Vacation mode"
-        body={`Missions are paused${settings.pausedUntil ? ` until ${settings.pausedUntil}` : ""}. Your streak is safe — see you when you're back!`}
+        body={`Missions are paused — see you on ${vacationReturnLabel(settings, today)}. Your streak is safe!`}
         href={backHref}
         label={backLabel}
       />
@@ -874,29 +1042,33 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
 
   const blockLabel = isPlacement
     ? `Placement · ${currentSkill.kidTitle}`
-    : run.blockIndex !== null
+    : run.blockIndex !== null && mode === run.mode
       ? run.blocks[run.blockIndex].label
-      : `${mode === "review" ? "Review" : mode === "test" ? "Test out" : "Practice"} · ${currentSkill.kidTitle}`;
+      : `${mode === "review" ? "Review" : mode === "test" ? "Skip check" : "Practice"} · ${currentSkill.kidTitle}`;
   const emoji = run.blockIndex !== null ? BLOCK_EMOJI[run.blocks[run.blockIndex].kind] : BLOCK_EMOJI[kindForSubject(currentSkill.subject)];
   const remaining = limitSeconds - elapsed;
   const isLast = !isPlacement && (results.length + 1 >= target || (timeUp && results.length + 1 >= MIN_BLOCK_ITEMS));
-  const sprintLast = isPlacement && results.length + 1 >= TEST_OUT_ITEMS;
-  const sprintEnds = sprintLast && (sprintIndex + 1 >= run.placement.length || (answered && !answered.correct && sprintFails + 1 >= PLACEMENT_MAX_FAILS));
+  const projected = answered ? [...results.map((r) => r.independent), answered.correct && answered.helpLevel === "independent"] : [];
+  const probeDone = isPlacement && projected.length >= probeTarget && !(projected.length === TEST_OUT_ITEMS && placementProbeResult(projected) === "second-set");
+  const sprintEnds = probeDone && (sprintIndex + 1 >= run.placement.length || (placementProbeResult(projected) !== "pass" && sprintFails + 1 >= PLACEMENT_MAX_FAILS));
   /** 0-based number of the question on screen (results only grow on Next, so this is stable across question → feedback). */
   const qIndex = results.length;
   const inPlay = phase === "question" || phase === "feedback";
   const showIntroCard = (phase === "intro" || (showIntro && phase === "question")) && introLines.length > 0;
-  const currency = { amount: currencyFor(finished?.xp ?? 0, settings.rewardRate), name: settings.theme.currency };
+  // Long learn blocks (weekend 30-45 min) would draw dozens of dots: show the answered ones plus the current.
+  const dotCount = target <= 20 ? target : results.length + 1;
+  const tutu = settings.theme.screen === "tutu";
+  const ponies = ponyNames(notes);
 
   return (
-    <div className="min-h-[100dvh] bg-[#F8FAFC] pb-44">
+    <div className={`min-h-[100dvh] bg-[#F8FAFC] ${phase === "feedback" ? "pb-[70dvh]" : "pb-44"}`}>
       <div className="mx-auto max-w-lg px-4 pt-6">
         {/* Header */}
         <div className="flex items-center justify-between gap-3">
           <Link href={backHref} className="tab-press flex min-h-[44px] items-center gap-1 text-sm font-semibold text-slate-400">
             ← {returnParam === "tonight" ? "Tonight" : "Mission Control"}
           </Link>
-          {inPlay && !early && !isPlacement && (
+          {inPlay && !early && !isPlacement && mode === "learn" && (
             <span
               className={`rounded-full px-3 py-1 text-xs font-bold tabular-nums ${
                 timeUp ? "bg-rose-100 text-rose-700" : remaining <= 60 ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"
@@ -922,14 +1094,14 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
               mode === "test" ? "bg-violet-100 text-violet-700" : mode === "review" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-blue-700"
             }`}
           >
-            {isPlacement ? "placement" : mode}
+            {isPlacement ? "placement" : MODE_WORD[mode]}
           </span>
         </div>
 
         {/* Item dots (Lily's only progress signal; Cole also sees the countdown) */}
         {inPlay && (
           <div className="mt-3 flex flex-wrap gap-1.5" aria-label={`${results.length} of ${target} done`}>
-            {Array.from({ length: target }, (_, i) => {
+            {Array.from({ length: dotCount }, (_, i) => {
               const r = results[i];
               const current = i === qIndex;
               const cls =
@@ -945,6 +1117,12 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
           </div>
         )}
 
+        {slowDown && phase === "question" && (
+          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800" role="status">
+            Take your time — read it all before you tap 🙂
+          </p>
+        )}
+
         {/* Body */}
         <div className="mt-4">
           {phase === "offer" && (
@@ -954,20 +1132,20 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
               </p>
               <h2 className="mt-2 text-xl font-bold text-slate-900">Already know this one?</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Get 5 in a row right and you skip straight to <strong>Mastered</strong>. Miss one and it just counts as practice.
+                Get 9 of 10 right and you skip straight to <strong>Mastered</strong>. No hints this time — and anything less just tells us where to start.
               </p>
               <button
                 type="button"
                 onClick={() => beginItems("test", primarySkill)}
                 className="mt-5 flex min-h-[60px] w-full items-center justify-center rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 text-lg font-bold text-white shadow-lg shadow-indigo-500/25 active:scale-[0.98]"
               >
-                Test out ⚡
+                Skip check ⚡
               </button>
               <button
                 type="button"
                 onClick={() => {
                   if (introApplies) {
-                    if (autoSpeak && introLines[0]) speakNow(introLines[0]);
+                    if (autoSpeak && introLines[0]) say(introLines[0]);
                     setPhase("intro");
                   } else beginItems("learn", primarySkill);
                 }}
@@ -987,7 +1165,7 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
               onDone={() => {
                 if (phase === "intro") beginItems("learn", primarySkill);
                 else {
-                  if (autoSpeak && item) speakNow(promptSpeech(item.question));
+                  if (autoSpeak && item) say(promptSpeech(item.question));
                   setShowIntro(false);
                 }
               }}
@@ -996,7 +1174,7 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
 
           {inPlay && item && !showIntroCard && (
             <QuestionCard
-              key={`${isPlacement ? sprintIndex : 0}-${qIndex}-${retrying ? "retry" : "first"}`}
+              key={`${item.skill.id}-${item.n}-${retrying ? "retry" : "first"}`}
               question={item.question}
               answered={answered}
               onSubmit={(raw) => submit(raw)}
@@ -1022,8 +1200,8 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
               </p>
               <h2 className="mt-2 text-xl font-bold text-slate-900">Let&apos;s take a break from this one</h2>
               <p className="mt-2 text-[15px] font-medium text-slate-600">
-                You still earned XP for trying. {learner.name === "Lily" ? "A grown-up" : "Mom or Dad"} will do this one with you next time — that&apos;s how
-                brains grow.
+                That one&apos;s done for tonight, good try — you still earned XP for trying. {early ? "A grown-up" : "Mom or Dad"} will show you a different way
+                next time. That&apos;s how brains grow.
               </p>
               <button
                 type="button"
@@ -1044,18 +1222,22 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
                     ? "Mission complete!"
                     : mode === "test"
                       ? finished.testedOut
-                        ? "Tested out!"
+                        ? "Skipped ahead!"
                         : "Good try!"
                       : finished.correct === finished.total && finished.total > 0
-                        ? "Perfect block!"
+                        ? "Perfect set!"
                         : "Block done!"
               }
-              subtitle={isPlacement ? `${run.subject ?? "math"} · ${sprintLog.length} test-out${sprintLog.length === 1 ? "" : "s"}` : `${primarySkill.kidTitle} · ${formatClock(elapsed)}`}
+              subtitle={
+                isPlacement
+                  ? `${run.subject ?? "math"} · ${sprintLog.length} skill${sprintLog.length === 1 ? "" : "s"} checked`
+                  : `${primarySkill.kidTitle} · ${formatClock(elapsed)}`
+              }
               note={finished.note}
               correct={finished.correct}
               total={finished.total}
               xp={finished.xp}
-              currency={currency}
+              currency={{ amount: finished.points, name: settings.theme.currency }}
               streak={
                 run.blockIndex !== null
                   ? { days: finished.streak, label: finished.missionComplete ? "streak safe for today" : "finish the mission to keep it going" }
@@ -1071,6 +1253,16 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
                     : { label: backLabel, href: backHref }
               }
               secondary={finished.nextBlockIndex >= 0 ? { label: backLabel, href: backHref } : { label: "Skill Map", href: `${base}/map` }}
+              extra={
+                tutu && finished.newlyMastered.length > 0 ? (
+                  <PonyPicker
+                    skills={finished.newlyMastered}
+                    taken={Object.values(ponies)}
+                    autoSpeak={autoSpeak}
+                    onName={(skill, name) => persist(() => namePony(learner.id, today, skill.id, name, skill.standards))}
+                  />
+                ) : undefined
+              }
             />
           )}
         </div>
@@ -1083,9 +1275,9 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
           explain={item.question.explain}
           correctAnswer={item.question.type === "text" && item.question.selfCheck ? undefined : answerText(item.question)}
           xp={answered.xp}
-          nextLabel={isPlacement ? (sprintEnds ? "Finish" : sprintLast ? "Next skill" : "Next") : isLast ? "Finish" : "Next"}
+          nextLabel={isPlacement ? (sprintEnds ? "Finish" : probeDone ? "Next skill" : "Next") : isLast ? "Finish" : "Next"}
           onNext={handleNext}
-          onTaught={markTaught}
+          onTaught={mode === "test" || isPlacement ? undefined : markTaught}
           onAskCoach={coachEnabled && !answered.correct && !(item.question.type === "text" && item.question.selfCheck) ? askExplain : undefined}
         />
       )}
@@ -1102,6 +1294,56 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
       )}
 
       <CoachSheet state={coach.state} onClose={coach.close} bigText={learner.grade <= 1} />
+    </div>
+  );
+}
+
+/** Lily names a pony for each newly mastered skill — six names to tap, never a keyboard. */
+function PonyPicker({
+  skills,
+  taken,
+  autoSpeak,
+  onName,
+}: {
+  skills: Skill[];
+  taken: string[];
+  autoSpeak: boolean;
+  onName: (skill: Skill, name: string) => void;
+}) {
+  const [named, setNamed] = useState<Record<string, string>>({});
+  return (
+    <div className="mt-4 space-y-3 text-left">
+      {skills.map((skill) => {
+        const chosen = named[skill.id];
+        const choices = ponyNameChoices(skill.id, [...taken, ...Object.values(named)]);
+        return (
+          <div key={skill.id} className="rounded-2xl border border-pink-100 bg-pink-50/70 p-4">
+            {chosen ? (
+              <p className="text-center text-base font-bold text-pink-800">🐴 Meet {chosen}! Your pony for {skill.kidTitle}.</p>
+            ) : (
+              <>
+                <p className="text-center text-sm font-bold text-pink-800">🐴 A new pony for your stable! Pick a name:</p>
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {choices.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => {
+                        if (autoSpeak) speakNow(`Meet ${name}!`);
+                        setNamed((m) => ({ ...m, [skill.id]: name }));
+                        onName(skill, name);
+                      }}
+                      className="tab-press min-h-[48px] rounded-xl bg-white px-2 text-sm font-bold text-pink-700 shadow-sm"
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

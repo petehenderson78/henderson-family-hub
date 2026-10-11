@@ -10,10 +10,18 @@
  *   failed write without double-counting. recorded_by is filled by the DB
  *   default auth.uid() (and checked by RLS). learn_skill_progress and
  *   learn_sessions are upserted on their natural keys.
+ *
+ * LEDGER
+ *   learn_rewards holds two kinds of rows: XP (reason "<mode>:<skill>", drives
+ *   the level ladder only) and input points (reason "pt:<kind>[:detail]", the
+ *   currency). Points are written through awardPoints, which applies the daily
+ *   caps and the 25-a-week cap before inserting (migration 009 re-checks both
+ *   in a trigger, so two devices cannot overshoot).
  */
 
 import { createClient } from "@/lib/supabase/client";
 import type { AttemptRecord, Learner, LearnerSettings, RewardRecord, SessionRecord, SkillProgress } from "./types";
+import { isPointRow, pointReason, pointsAllowed, POINTS, type PointKind } from "./stats";
 import {
   attemptToRow,
   learnerFromRow,
@@ -28,7 +36,7 @@ import {
   type RewardRow,
   type SessionRow,
 } from "./rows";
-import { addDaysToDateStr } from "./dates";
+import { addDaysToDateStr, familyMidnightIso, weekStartDate } from "./dates";
 
 export { newClientId };
 
@@ -118,11 +126,46 @@ export async function loadRecentSessions(learnerId: string, today: string, days 
   return ((data ?? []) as SessionRow[]).map(sessionFromRow);
 }
 
-/** Total XP = sum of the reward ledger. */
+/** Total XP = sum of the XP rows of the ledger (points and legacy redemptions excluded). */
 export async function loadXpTotal(learnerId: string): Promise<number> {
-  const { data, error } = await client().from("learn_rewards").select("delta").eq("learner_id", learnerId);
+  const { data, error } = await client().from("learn_rewards").select("delta, reason").eq("learner_id", learnerId);
   check(error, "loadXpTotal");
-  return ((data ?? []) as { delta: number }[]).reduce((sum, r) => sum + (Number(r.delta) || 0), 0);
+  return ((data ?? []) as { delta: number; reason: string }[])
+    .filter((r) => !isPointRow({ reason: r.reason ?? "" }) && !(r.reason ?? "").startsWith("redeem:"))
+    .reduce((sum, r) => sum + (Number(r.delta) || 0), 0);
+}
+
+/** Ledger rows written since local midnight on this week's Monday (family time). */
+export async function loadWeekRewards(learnerId: string, today: string): Promise<RewardRecord[]> {
+  return loadRewardsSince(learnerId, familyMidnightIso(weekStartDate(today)));
+}
+
+// Points awards run one at a time per page so two awards finishing together see each other's rows.
+let pointsChain: Promise<unknown> = Promise.resolve();
+
+/**
+ * Award input points (design §4). Loads this week's ledger, applies the daily
+ * caps (block 3, on-time 1, surprise bonus 1) and the weekly cap of 25, and
+ * inserts what is allowed with `clientId` (pass a stable one so the player's
+ * retry queue can replay the call). Returns the points actually written.
+ */
+export function awardPoints(
+  learnerId: string,
+  kind: PointKind,
+  opts: { today: string; detail?: string; amount?: number; clientId?: string }
+): Promise<number> {
+  const clientId = opts.clientId ?? newClientId();
+  const run = async () => {
+    const week = await loadWeekRewards(learnerId, opts.today);
+    if (week.some((r) => r.clientId === clientId)) return 0; // already written by an earlier try
+    const allowed = pointsAllowed(week, kind, opts.amount ?? POINTS[kind], opts.today);
+    if (allowed <= 0) return 0;
+    await addReward(learnerId, allowed, pointReason(kind, opts.detail), clientId);
+    return allowed;
+  };
+  const next = pointsChain.then(run, run);
+  pointsChain = next.catch(() => undefined);
+  return next;
 }
 
 export async function loadRewardsSince(learnerId: string, sinceIso: string): Promise<RewardRecord[]> {
