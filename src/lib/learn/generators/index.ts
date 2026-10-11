@@ -9,7 +9,7 @@
  * plain Node.
  *
  * Files: math-early (grades 1-2), math-upper / math-upper-frac /
- * math-upper-geo (grades 3-5), reasoning, reading, writing.
+ * math-upper-geo (grades 3-5), reasoning, reading, writing, phonics (Lily).
  */
 
 import type { Generator, Question, Skill } from "../types";
@@ -21,6 +21,7 @@ import { generators as mathUpperGeo } from "./math-upper-geo";
 import { generators as reasoning } from "./reasoning";
 import { generators as reading } from "./reading";
 import { generators as writing } from "./writing";
+import { generators as phonics } from "./phonics";
 
 export const generators: Record<string, Generator> = {
   ...mathEarly,
@@ -30,6 +31,7 @@ export const generators: Record<string, Generator> = {
   ...reasoning,
   ...reading,
   ...writing,
+  ...phonics,
 };
 
 export function getGenerator(id: string): Generator | undefined {

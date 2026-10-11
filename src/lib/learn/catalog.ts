@@ -16,6 +16,7 @@
 import type { Skill, Subject } from "./types";
 import { MATH_SKILLS } from "./catalog-math";
 import { COLE_READING_SKILLS } from "./catalog-reading-cole";
+import { LILY_READING_SKILLS } from "./catalog-reading-lily";
 import { REASONING_SKILLS } from "./catalog-reasoning";
 
 export const TRACK_LEVEL: Record<string, number> = { lily: 1, cole: 3 };
@@ -43,6 +44,8 @@ export const CATALOG: Skill[] = [
   ...MATH_SKILLS,
   // Reading / writing (Cole) — ./catalog-reading-cole.ts
   ...COLE_READING_SKILLS,
+  // Phonics, sight words and decodable reading (Lily) — ./catalog-reading-lily.ts
+  ...LILY_READING_SKILLS,
   // Reasoning ("Brain"), per-learner levels — ./catalog-reasoning.ts
   ...REASONING_SKILLS,
 ];
