@@ -119,7 +119,7 @@ export default function QuestionCard({
         <div className="mt-3 rounded-xl bg-slate-50 p-4">
           <div className="flex items-center justify-between gap-2">
             <p className="font-bold text-slate-900">{question.display.passage.title}</p>
-            <SpeakButton text={question.display.passage.text} label="Read" />
+            <SpeakButton text={question.display.passage.text} label="Read it to me" />
           </div>
           <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-slate-700">{question.display.passage.text}</p>
         </div>

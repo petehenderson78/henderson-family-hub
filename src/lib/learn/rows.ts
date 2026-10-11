@@ -107,7 +107,9 @@ export function newClientId(): string {
 
 export function learnerFromRow(row: LearnerRow): Learner {
   const rawSettings = (row.settings && typeof row.settings === "object" ? row.settings : {}) as Record<string, unknown>;
-  const email = typeof row.email === "string" ? row.email : typeof rawSettings.email === "string" ? rawSettings.email : null;
+  // The plain `learners.email` column (migration 008) wins; legacy rows kept it in the settings blob.
+  const emailOf = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const email = emailOf(row.email) ?? emailOf(rawSettings.email);
   return {
     id: row.id,
     slug: row.slug,

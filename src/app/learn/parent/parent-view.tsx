@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import type { Learner, LearnerSettings, SessionBlock, SessionRecord, Skill, SkillProgress } from "@/lib/learn/types";
 import { catalogFor, SUBJECT_LABEL } from "@/lib/learn/catalog";
-import { levelFor, mergeProgress, planMission } from "@/lib/learn/mastery";
+import { levelFor, mergeProgress, planMission, shiftReviewDates } from "@/lib/learn/mastery";
 import {
   computeStreak,
   daysPracticedThisWeek,
@@ -22,7 +22,7 @@ import {
   weeklyRing,
   xpThisWeek,
 } from "@/lib/learn/stats";
-import { addDays, weekDates, weekdayShort } from "@/lib/learn/dates";
+import { addDays, addDaysToDateStr, weekDates, weekdayShort } from "@/lib/learn/dates";
 import { saveProgress, updateLearnerSettings } from "@/lib/learn/store";
 import { addNote, upsertRewardItem, NOTE_KIND_LABEL, type LearnNote, type RewardItem } from "@/lib/learn/store-notes";
 import { fetchCoachLog } from "@/lib/learn/coach-client";
@@ -311,7 +311,7 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
             <h2 className="text-lg font-bold tracking-tight text-slate-900">Settings</h2>
             <div className="mt-3 space-y-3">
               {derived.map((d) => (
-                <SettingsEditor key={d.learner.id} learner={d.learner} today={today} />
+                <SettingsEditor key={d.learner.id} learner={d.learner} progressRows={d.progressRows} today={today} />
               ))}
             </div>
           </section>
@@ -372,12 +372,32 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
 const FIELD = "w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-base font-bold text-slate-900 outline-none focus:border-indigo-400";
 const LABEL = "mb-1 block text-center text-[10px] font-semibold uppercase tracking-wider text-slate-400";
 
-function SettingsEditor({ learner, today }: { learner: Learner; today: string }) {
+const PAUSE_HORIZON_DAYS = 400;
+
+/**
+ * Days from today that `next` pauses and `prev` did not: a new or extended
+ * "Pause until", or a new vacation range. Pending reviews are moved by this
+ * many days when the settings are saved, so they do not pile up on the return day.
+ */
+function newlyPausedDays(prev: LearnerSettings, next: LearnerSettings, today: string): number {
+  let days = 0;
+  for (let i = 0, d = today; i < PAUSE_HORIZON_DAYS; i++, d = addDaysToDateStr(d, 1)) {
+    if (isPaused(next, d) && !isPaused(prev, d)) days += 1;
+  }
+  return days;
+}
+
+function SettingsEditor({ learner, progressRows, today }: { learner: Learner; progressRows: SkillProgress[]; today: string }) {
   const [form, setForm] = useState<LearnerSettings>(learner.settings);
+  /** last persisted settings — the pause comparison baseline, so a re-save never shifts reviews twice */
+  const [saved, setSaved] = useState<LearnerSettings>(learner.settings);
+  const [rows, setRows] = useState<SkillProgress[]>(progressRows);
+  const [shiftNote, setShiftNote] = useState<string | null>(null);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   const patch = (fn: (f: LearnerSettings) => LearnerSettings) => {
     setState("idle");
+    setShiftNote(null);
     setForm(fn);
   };
   const int = (raw: string, min: number, max: number) => Math.max(min, Math.min(max, Number.parseInt(raw || "0", 10) || 0));
@@ -386,6 +406,14 @@ function SettingsEditor({ learner, today }: { learner: Learner; today: string })
     setState("saving");
     try {
       await updateLearnerSettings(learner.id, form);
+      // Vacation: move every pending review past the newly paused days (once per pause change).
+      const days = newlyPausedDays(saved, form, today);
+      const shifted = days > 0 ? shiftReviewDates(rows, days) : rows;
+      const changed = shifted.filter((p, i) => p !== rows[i]);
+      if (changed.length > 0) await saveProgress(learner.id, changed);
+      setRows(shifted);
+      setShiftNote(changed.length > 0 ? `Review dates moved ${days} day${days === 1 ? "" : "s"}` : null);
+      setSaved(form);
       setState("saved");
     } catch {
       setState("error");
@@ -499,6 +527,11 @@ function SettingsEditor({ learner, today }: { learner: Learner; today: string })
       >
         {state === "saving" ? "Saving…" : state === "saved" ? "Saved ✓" : state === "error" ? "Couldn't save — tap to retry" : "Save settings"}
       </button>
+      {shiftNote && (
+        <p className="mt-2 text-center text-[11px] font-semibold text-emerald-600" role="status">
+          📅 {shiftNote} — reviews pick up after the break.
+        </p>
+      )}
     </div>
   );
 }

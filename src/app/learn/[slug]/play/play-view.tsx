@@ -6,6 +6,7 @@ import type {
   BlockKind,
   HelpLevel,
   Learner,
+  Option,
   PracticeMode,
   ProgressMap,
   Question,
@@ -182,9 +183,29 @@ function coachQuestion(q: Question, raw?: string): CoachQuestion {
   };
 }
 
-/** Text spoken for a prompt: never the answer (generators keep display.speak answer-free; the selfcheck asserts it). */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Drop every sentence of `text` that names one of the (word) option labels. */
+function withoutOptionLabels(text: string, options: Option[]): string {
+  const labels = options.map((o) => (o.label ?? "").trim().toLowerCase()).filter((l) => /[a-z]/i.test(l));
+  if (labels.length === 0) return text;
+  const named = new RegExp(`(^|[^a-z0-9])(${labels.map(escapeRegExp).join("|")})(?=$|[^a-z0-9])`, "i");
+  return (text.match(/[^.!?]+[.!?]*/g) ?? [text]).filter((sentence) => !named.test(sentence)).join("").trim();
+}
+
+/**
+ * Text AUTO-spoken for a prompt: never the answer (generators keep display.speak
+ * answer-free; the selfcheck asserts it), never a whole passage (the passage has
+ * its own "Read it to me" button, so only the short question is spoken) and never
+ * the option labels of a choice item (each word option has its own small speaker).
+ */
 function promptSpeech(q: Question): string {
-  return q.display?.speak ?? q.prompt;
+  if (q.display?.passage) return q.prompt;
+  const text = q.display?.speak ?? q.prompt;
+  if (q.type !== "choice") return text;
+  return withoutOptionLabels(text, q.options) || q.prompt;
 }
 
 function buildRun(props: PlayViewProps): Run | string {
@@ -292,15 +313,20 @@ function takeCounter(slug: string, skillId: string, today: string): number {
   return n;
 }
 
-/** Build the next item: seed = hash(slug | skill | mode | date | n); the stored seed is the one actually used. */
-function makeItemFor(slug: string, today: string, skill: Skill, m: PracticeMode, previous: Question | null): Item {
+/**
+ * Build the next item: seed = hash(slug | skill | mode | date | n); the stored seed is the one actually used.
+ * The generator also gets params.attempt = `attempts` (the skill's attempts when the block started) + n,
+ * so content-backed generators (reading passages, verbal banks) can cycle their pool instead of repeating.
+ */
+function makeItemFor(slug: string, today: string, skill: Skill, m: PracticeMode, previous: Question | null, attempts = 0): Item {
   const n = takeCounter(slug, skill.id, today);
+  const withAttempt: Skill = { ...skill, params: { ...skill.params, attempt: attempts + n } };
   let seed = questionSeed(slug, skill.id, m, today, n);
-  let q = makeQuestion(skill, seed);
+  let q = makeQuestion(withAttempt, seed);
   // Avoid showing the exact same item twice in a row.
   for (let salt = 1; salt <= 3 && previous && q.prompt === previous.prompt && q.display?.svg === previous.display?.svg; salt++) {
     seed = hashString(`${seed}:retry${salt}`);
-    q = makeQuestion(skill, seed);
+    q = makeQuestion(withAttempt, seed);
   }
   return { skill, question: q, seed, n };
 }
@@ -393,9 +419,11 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
   );
   const [startedAt] = useState(() => new Date());
 
+  // params.attempt counts from the attempts the skill had when the block started (stable for the whole block).
   const makeItem = useCallback(
-    (skill: Skill, m: PracticeMode, previous: Question | null): Item => makeItemFor(learner.slug, today, skill, m, previous),
-    [learner.slug, today]
+    (skill: Skill, m: PracticeMode, previous: Question | null): Item =>
+      makeItemFor(learner.slug, today, skill, m, previous, run.progressMap[skill.id]?.attempts ?? 0),
+    [learner.slug, today, run.progressMap]
   );
 
   // --- initial phase ---------------------------------------------------------
@@ -416,7 +444,9 @@ function Player({ run, learner, sessions, today, coachEnabled, backHref, backLab
   const [phase, setPhase] = useState<Phase>(initialPhase);
   const [progressMap, setProgressMap] = useState<ProgressMap>(run.progressMap);
   const [results, setResults] = useState<ItemResult[]>([]);
-  const [item, setItem] = useState<Item | null>(() => (initialPhase === "question" ? makeItemFor(learner.slug, today, primarySkill, run.mode, null) : null));
+  const [item, setItem] = useState<Item | null>(() =>
+    initialPhase === "question" ? makeItemFor(learner.slug, today, primarySkill, run.mode, null, run.progressMap[primarySkill.id]?.attempts ?? 0) : null
+  );
   const [answered, setAnswered] = useState<Answered | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [hintUsed, setHintUsed] = useState(false);
