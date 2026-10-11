@@ -283,11 +283,19 @@ function compareWhy(a: number, b: number): string {
   const places = [1000000, 100000, 10000, 1000, 100, 10, 1];
   const names: Record<number, string> = { 1000000: "millions", 100000: "hundred-thousands", 10000: "ten-thousands", 1000: "thousands", 100: "hundreds", 10: "tens", 1: "ones" };
   if (String(big).length !== String(small).length) return `${big} has more digits than ${small}, so ${big} is greater.`;
+  // Biggest place first; name every place that ties before the one that decides.
+  const tied: string[] = [];
   for (const p of places) {
+    if (p > big) continue;
     const db = Math.floor(big / p) % 10;
     const ds = Math.floor(small / p) % 10;
-    if (p > big) continue;
-    if (db !== ds) return `Compare the ${names[p]} first: ${db} ${names[p]} is more than ${ds} ${names[p]}, so ${big} > ${small}.`;
+    if (db === ds) {
+      tied.push(`${db} ${names[p]}`);
+      continue;
+    }
+    const why = `${db} ${names[p]} is more than ${ds} ${names[p]}, so ${big} > ${small}.`;
+    if (tied.length === 0) return `Compare the ${names[p]} first: ${why}`;
+    return `Both have ${tied.join(" and ")}, so compare the next place, the ${names[p]}: ${why}`;
   }
   return `${big} is greater than ${small}.`;
 }
@@ -329,7 +337,7 @@ const compareNumbers: Generator = (ctx) => {
   return numericChoice(rng, answer, nums.filter((n) => n !== answer), {
     prompt: `Which number is the ${greatest ? "greatest" : "least"}?`,
     display: { speak: `Which number is the ${greatest ? "greatest" : "least"}?` },
-    explain: `In order from least to greatest: ${sorted.join(", ")}. So the ${greatest ? "greatest" : "least"} is ${answer}. ${compareWhy(sorted[sorted.length - 1], sorted[sorted.length - 2])}`,
+    explain: `In order from least to greatest: ${sorted.join(", ")}. So the ${greatest ? "greatest" : "least"} is ${answer}. ${greatest ? compareWhy(sorted[sorted.length - 1], sorted[sorted.length - 2]) : compareWhy(sorted[1], sorted[0])}`,
     hint: `Look at the ${max > 99 ? "hundreds" : "tens"} digit of each number first. If they tie, look at the next place.`,
   });
 };
@@ -384,7 +392,9 @@ const tenFrameSub: Generator = (ctx) => {
   const max = Math.min(20, numParam(ctx, "max", 10));
   const frames: 1 | 2 = max > 10 ? 2 : 1;
   const t = max > 10 ? int(rng, 11, max) : int(rng, 2, max);
-  let s = max > 10 ? int(rng, 2, t - 1) : int(rng, 1, t);
+  // s < t: "6 − 6" would be a degenerate take-everything item (and the
+  // count-up explanation would count 0 jumps backwards).
+  let s = max > 10 ? int(rng, 2, t - 1) : int(rng, 1, t - 1);
   if (t - s === s && s > 1) s -= 1;
   const d = t - s;
   let explain: string;
@@ -393,8 +403,8 @@ const tenFrameSub: Generator = (ctx) => {
     explain = `Take away to ten first: ${t} − ${toTen} = 10. Then take away the rest: ${s} − ${toTen} = ${s - toTen}, and 10 − ${s - toTen} = ${d}. So ${t} − ${s} = ${d}.`;
   } else if (s <= 3) {
     explain = `Count back ${s} from ${t}: ${seq(t - 1, d)}. So ${t} − ${s} = ${d}.`;
-  } else if (d <= 3) {
-    explain = `Think addition: ${s} + ? = ${t}. Count up from ${s}: ${seq(s + 1, t)} — that is ${d} jumps. So ${t} − ${s} = ${d}.`;
+  } else if (d <= 3 && d > 0) {
+    explain = `Think addition: ${s} + ? = ${t}. Count up from ${s}: ${seq(s + 1, t)} — that is ${plural(d, "jump")}. So ${t} − ${s} = ${d}.`;
   } else {
     explain = `The frame shows ${t} dots. Taking away the ${s} orange ones leaves ${d} blue ones. ${t} − ${s} = ${d}.`;
   }
@@ -480,15 +490,17 @@ const doublesNearDoubles: Generator = (ctx) => {
     };
   }
   const first = rng() < 0.5;
-  const a = first ? n : n + 1;
-  const b = first ? n + 1 : n;
+  // n + (n + 1) must stay within max (and within the 20 cells of a double ten frame).
+  const nn = Math.min(n, Math.floor((max - 1) / 2));
+  const a = first ? nn : nn + 1;
+  const b = first ? nn + 1 : nn;
   return {
     type: "numeric",
     prompt: `${a} + ${b} = ?`,
-    answer: 2 * n + 1,
-    display: { svg: tenFrameSvg(a, b, 2 * n + 1 > 10 ? 2 : 1), speak: `${a} plus ${b}` },
-    explain: `Near double: ${n} + ${n} = ${2 * n}, then one more makes ${2 * n + 1}. So ${a} + ${b} = ${2 * n + 1}.`,
-    hint: `Use the double you know, ${n} + ${n}, then add 1 more.`,
+    answer: 2 * nn + 1,
+    display: { svg: tenFrameSvg(a, b, 2 * nn + 1 > 10 ? 2 : 1), speak: `${a} plus ${b}` },
+    explain: `Near double: ${nn} + ${nn} = ${2 * nn}, then one more makes ${2 * nn + 1}. So ${a} + ${b} = ${2 * nn + 1}.`,
+    hint: `Use the double you know, ${nn} + ${nn}, then add 1 more.`,
   };
 };
 
@@ -504,7 +516,7 @@ const missingAddend: Generator = (ctx) => {
   if (total - part === part) part += 1;
   const other = total - part;
   const variant = int(rng, 0, 4);
-  const countUp = `Count up from ${part} to ${total}: ${seq(part + 1, total)} — that is ${other} jumps.`;
+  const countUp = `Count up from ${part} to ${total}: ${seq(part + 1, total)} — that is ${plural(other, "jump")}.`;
   switch (variant) {
     case 0:
       return {
@@ -783,13 +795,27 @@ const tenMoreLess: Generator = (ctx) => {
   if (!more && n - step === step) n += 1;
   const answer = more ? n + step : n - step;
   const place = step === 10 ? "tens" : "hundreds";
+  const nextPlace = step === 10 ? "hundreds" : "thousands";
+  const unitWord = step === 10 ? "ten" : "hundred";
+  const lower = step === 10 ? "ones" : "tens and ones";
+  // Crossing a hundred (91 + 10 = 101, 306 − 10 = 296): the next place changes too.
+  const crosses = Math.floor(n / (step * 10)) !== Math.floor(answer / (step * 10));
+  const digit = Math.floor(n / step) % 10;
+  const nextUnit = step === 10 ? "hundred" : "thousand";
+  const explain = crosses
+    ? more
+      ? `${n} has ${digit} ${place}. One more ${unitWord} makes 10 ${place} = 1 ${nextUnit}, so the ${place} digit becomes 0 and the ${nextPlace} digit goes up by 1: ${n} + ${step} = ${answer}. The ${lower} stay the same.`
+      : `${n} has 0 ${place}, so regroup 1 ${nextUnit} as 10 ${place} and take 1 ${unitWord} away: 9 ${place} are left and the ${nextPlace} digit goes down by 1. ${n} − ${step} = ${answer}. The ${lower} stay the same.`
+    : `${step} ${more ? "more" : "less"} changes only the ${place} digit: ${n} ${more ? "+" : "−"} ${step} = ${answer}. The ${lower} stay the same.`;
   return {
     type: "numeric",
     prompt: `What is ${step} ${more ? "more" : "less"} than ${n}?`,
     answer,
     display: { speak: `What is ${step} ${more ? "more" : "less"} than ${n}?` },
-    explain: `${step} ${more ? "more" : "less"} changes only the ${place} digit: ${n} ${more ? "+" : "−"} ${step} = ${answer}. The ${step === 10 ? "ones" : "tens and ones"} stay the same.`,
-    hint: `Only the ${place} digit changes. Count ${more ? "up" : "down"} one ${step === 10 ? "ten" : "hundred"}.`,
+    explain,
+    hint: crosses
+      ? `Count ${more ? "up" : "down"} one ${unitWord}. The ${place} digit is ${digit}, so the ${nextPlace} digit changes too. The ${lower} stay the same.`
+      : `Only the ${place} digit changes. Count ${more ? "up" : "down"} one ${unitWord}.`,
   };
 };
 
@@ -997,6 +1023,8 @@ const add2Digit: Generator = (ctx) => {
   let b: number;
   if (k === "2d+1d") {
     a = int(rng, 11, 89);
+    // No-regroup items need room in the ones: 69 + 1 would make a new ten.
+    if (!regroup && a % 10 === 9) a -= 1;
     const ao = a % 10;
     b = regroup ? int(rng, Math.max(1, 10 - ao), 9) : int(rng, 1, Math.max(1, 9 - ao));
     if (!regroup && ao + b >= 10) b = 9 - ao || 1;
@@ -1055,7 +1083,9 @@ const sub2Digit: Generator = (ctx) => {
       ? `Subtract the tens: ${a} − ${b} = ${d}. Only the tens digit changes.`
       : afterTens % 10 >= bOnes
         ? `Take away the tens first: ${a} − ${bTens} = ${afterTens}. Then the ones: ${afterTens} − ${bOnes} = ${d}.`
-        : `Take away the tens first: ${a} − ${bTens} = ${afterTens}. Then the ones in two steps: ${afterTens} − ${afterTens % 10} = ${afterTens - (afterTens % 10)}, then − ${bOnes - (afterTens % 10)} more = ${d}. (In columns: regroup 1 ten as 10 ones.)`;
+        : afterTens % 10 === 0
+          ? `Take away the tens first: ${a} − ${bTens} = ${afterTens}. ${afterTens} is already a ten, so take the ones straight away: ${afterTens} − ${bOnes} = ${d} (count back ${bOnes}: ${seq(afterTens - 1, d)}). (In columns: regroup 1 ten as 10 ones.)`
+          : `Take away the tens first: ${a} − ${bTens} = ${afterTens}. Then the ones in two steps: ${afterTens} − ${afterTens % 10} = ${afterTens - (afterTens % 10)}, then − ${bOnes - (afterTens % 10)} more = ${d}. (In columns: regroup 1 ten as 10 ones.)`;
   return {
     type: "numeric",
     prompt: `${a} − ${b} = ?`,
@@ -1335,6 +1365,16 @@ function timeWords(h: number, m: number): string {
   return `${m} minutes past ${h}`;
 }
 
+/** Where the hour hand sits at h:m, in kid words (it moves between h and h + 1 all hour). */
+function hourHandWords(h: number, m: number): string {
+  const next = (h % 12) + 1;
+  if (m === 0) return `points right at ${h}`;
+  if (m <= 15) return `is just past ${h}`;
+  if (m < 30) return `is between ${h} and ${next}, not yet halfway`;
+  if (m === 30) return `is halfway between ${h} and ${next}`;
+  return `is most of the way from ${h} to ${next} — it has not reached ${next} yet, so the hour is still ${h}`;
+}
+
 function clockQuestion(rng: () => number, h: number, m: number, allMinutes: number[]): Question {
   const answer = timeStr(h, m);
   const wrongs = [
@@ -1392,7 +1432,7 @@ const timeFiveMinutes: Generator = (ctx) => {
     return optionChoice(rng, answer, others, {
       prompt: `Which clock shows ${timeStr(h, m)}?`,
       display: { speak: `Which clock shows ${timeStr(h, m)}?` },
-      explain: `For ${timeStr(h, m)}: the long hand points to ${m / 5 || 12} (${m} minutes = count by 5s), and the short hand is ${m === 0 ? `on ${h}` : `just past ${h}`}.`,
+      explain: `For ${timeStr(h, m)}: the long hand points to ${m / 5 || 12} (${m} minutes = count by 5s), and the short hand ${hourHandWords(h, m)}.`,
       hint: "Minutes: count by 5s around the clock. The long hand should point at the right number.",
     });
   }
@@ -1449,11 +1489,16 @@ const COINS: Coin[] = [
   { name: "quarter", plural: "quarters", value: 25, r: 10, fill: "#94a3b8" },
 ];
 
+/** COINS indexes from the biggest value down: count on from quarters, then dimes, nickels, pennies. */
+const COIN_ORDER = [3, 2, 1, 0];
+
+function coinTotal(counts: number[]): number {
+  return counts.reduce((s, c, i) => s + c * COINS[i].value, 0);
+}
+
 function coinsSvg(counts: number[]): string {
   const items: Coin[] = [];
-  counts.forEach((c, i) => {
-    for (let k = 0; k < c; k++) items.push(COINS[i]);
-  });
+  for (const i of COIN_ORDER) for (let k = 0; k < (counts[i] ?? 0); k++) items.push(COINS[i]);
   const out: string[] = [];
   const perRow = 4;
   items.forEach((coin, idx) => {
@@ -1466,13 +1511,33 @@ function coinsSvg(counts: number[]): string {
 }
 
 function coinsWords(counts: number[]): string {
-  const parts = counts.map((c, i) => (c > 0 ? `${c} ${c === 1 ? COINS[i].name : COINS[i].plural}` : "")).filter(Boolean);
+  const parts = COIN_ORDER.filter((i) => counts[i] > 0).map((i) => `${counts[i]} ${counts[i] === 1 ? COINS[i].name : COINS[i].plural}`);
   return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
 }
 
+/** "2 × 25¢ = 50¢, 1 × 10¢ = 10¢, …" — biggest coins first. */
 function centsSum(counts: number[]): string {
-  const parts = counts.map((c, i) => (c > 0 ? `${c} × ${COINS[i].value}¢ = ${c * COINS[i].value}¢` : "")).filter(Boolean);
-  return parts.join(", ");
+  return COIN_ORDER.filter((i) => counts[i] > 0)
+    .map((i) => `${counts[i]} × ${COINS[i].value}¢ = ${counts[i] * COINS[i].value}¢`)
+    .join(", ");
+}
+
+/** The count-on the intro teaches: "25, 50, 60, 61, 62". */
+function coinsCountOn(counts: number[]): string {
+  const run: number[] = [];
+  let t = 0;
+  for (const i of COIN_ORDER) {
+    for (let k = 0; k < counts[i]; k++) {
+      t += COINS[i].value;
+      run.push(t);
+    }
+  }
+  return run.join(", ");
+}
+
+/** "1 ten + 1 five + 2 ones" (zero terms dropped, plurals right). */
+function billsLabel(tens: number, fives: number, ones: number): string {
+  return [tens ? plural(tens, "ten") : "", fives ? plural(fives, "five") : "", ones ? plural(ones, "one") : ""].filter(Boolean).join(" + ");
 }
 
 const coinsValue: Generator = (ctx) => {
@@ -1528,17 +1593,28 @@ const coinsValue: Generator = (ctx) => {
       };
     }
     if (variant === 1) {
-      const amt = int(rng, 6, 20);
+      // $6-$19 from $10, $5 and $1 bills ($20 itself would just be one $20 bill).
+      const amt = int(rng, 6, 19);
       const tens = Math.floor(amt / 10);
       const fives = Math.floor((amt % 10) / 5);
       const ones = amt % 5;
-      const answer = [tens ? `${tens} ten` : "", fives ? `${fives} five` : "", ones ? `${ones} one${ones > 1 ? "s" : ""}` : ""].filter(Boolean).join(" + ");
-      const wrong = [`${tens + 1} ten + ${ones} one${ones !== 1 ? "s" : ""}`, `${fives + 1} five${fives + 1 > 1 ? "s" : ""} + ${ones} one${ones !== 1 ? "s" : ""}`, `${tens} ten + ${fives} five + ${ones + 1} ones`, `${amt} fives`].filter((w) => w !== answer);
+      const answer = billsLabel(tens, fives, ones);
+      // Same amount with more bills first (the real "fewest" test), then wrong totals.
+      const cands: [number, number, number][] = [
+        [tens - 1, fives + 2, ones],
+        [tens, fives - 1, ones + 5],
+        [0, 0, amt],
+        [tens, fives, ones + 1],
+        [tens + 1, fives, ones],
+        [tens, fives + 1, ones],
+      ];
+      const wrong = cands.filter(([t, f, o]) => t >= 0 && f >= 0 && o >= 0 && t + f + o > 0).map(([t, f, o]) => billsLabel(t, f, o));
+      const bills = [...Array.from({ length: tens }, () => "$10"), ...Array.from({ length: fives }, () => "$5"), ...Array.from({ length: ones }, () => "$1")];
       return labelChoice(rng, answer, wrong, {
         prompt: `Which bills make exactly $${amt} with the fewest bills?`,
         display: { speak: `Which bills make exactly ${amt} dollars with the fewest bills?` },
-        explain: `Use the biggest bill first: ${tens ? `$10 ` : ""}${fives ? `+ $5 ` : ""}${ones ? `+ $${ones} in ones ` : ""}= $${amt}.`,
-        hint: "Start with the biggest bill that fits, then fill in with smaller bills.",
+        explain: `Use the biggest bill that fits first, then the next biggest: ${bills.join(" + ")} = $${amt}. That is ${plural(bills.length, "bill")}; every other way to make $${amt} needs more bills.`,
+        hint: "Start with the biggest bill that fits, then fill in with smaller bills. Check the total too.",
       });
     }
     const a = pick(rng, bills.filter((x) => x < 20));
@@ -1554,7 +1630,7 @@ const coinsValue: Generator = (ctx) => {
   }
   if (mode === "problem") {
     const counts = [int(rng, 0, 4), int(rng, 0, 2), int(rng, 0, 3), int(rng, 1, 3)];
-    const total = counts.reduce((s, c, i) => s + c * COINS[i].value, 0);
+    const total = coinTotal(counts);
     const variant = int(rng, 0, 2);
     const name = pick(rng, KID_NAMES);
     if (variant === 0) {
@@ -1571,10 +1647,20 @@ const coinsValue: Generator = (ctx) => {
     }
     if (variant === 1) {
       const dollars = int(rng, 1, 3);
-      return labelChoice(rng, `$${dollars}.${String(total).padStart(2, "0")}`, [`$${total}.${dollars}`, `$${dollars}${total}`, `${dollars}¢ and $${total}`, `$${dollars}.${String(total + 10).padStart(2, "0")}`], {
-        prompt: `${name} has ${dollars} dollar${dollars > 1 ? "s" : ""} and ${total}¢. How do we write that with a dollar sign?`,
-        display: { speak: `${name} has ${dollars} dollars and ${total} cents. How do we write that with a dollar sign?` },
-        explain: `Dollars go before the point, cents after it (always two digits): $${dollars}.${String(total).padStart(2, "0")}.`,
+      // The cents after the point must be 0-99: drop the smallest coins until they fit
+      // (otherwise "1 dollar and 108¢" would need a carry, not a notation lesson).
+      const cc = counts.slice();
+      let cents = total;
+      while (cents > 99) {
+        cc[cc.findIndex((c) => c > 0)] -= 1;
+        cents = coinTotal(cc);
+      }
+      const two = (c: number) => String(c).padStart(2, "0");
+      const answer = `$${dollars}.${two(cents)}`;
+      return labelChoice(rng, answer, [`$${cents}.${dollars}`, `$${dollars}${cents}`, `${dollars}¢ and $${cents}`, `$${dollars}.${two((cents + 10) % 100)}`], {
+        prompt: `${name} has ${dollars} dollar${dollars > 1 ? "s" : ""} and ${cents}¢. How do we write that with a dollar sign?`,
+        display: { speak: `${name} has ${dollars} dollar${dollars > 1 ? "s" : ""} and ${cents} cents. How do we write that with a dollar sign?` },
+        explain: `Dollars go before the point, cents after it (always two digits): ${answer}.`,
         hint: "Dollars, then a point, then the cents as two digits.",
       });
     }
@@ -1609,7 +1695,7 @@ const coinsValue: Generator = (ctx) => {
       prompt: `How many cents: ${coinsWords(counts)}?`,
       answer: total,
       display: { svg: coinsSvg(counts), speak: `How many cents is ${coinsWords(counts)}?` },
-      explain: `Start with the biggest coins: ${centsSum(counts)}. Add them: ${total}¢.`,
+      explain: `Start with the biggest coins and count on: ${coinsCountOn(counts)}. (${centsSum(counts)}.) That is ${total}¢.`,
       hint: "Count the quarters first, then the dimes, then nickels, then pennies. Count on from the biggest coins.",
     };
   }
@@ -1632,14 +1718,16 @@ const BAR_COLORS = [COLORS.blue, COLORS.amber, COLORS.green, COLORS.rose];
 function barsSvg(lengths: number[], labels: string[], unit = 0): string {
   const out: string[] = [];
   const maxLen = Math.max(...lengths);
-  const scale = 70 / maxLen;
+  const x0 = 8;
+  const scale = 84 / maxLen;
   lengths.forEach((len, i) => {
     const y = 18 + i * (lengths.length > 2 ? 24 : 30);
-    out.push(svgText(10, y + 4, labels[i], 6, 'text-anchor="start" font-weight="700"'));
-    out.push(`<rect x="24" y="${y - 4}" width="${r1(len * scale)}" height="9" rx="2" fill="${BAR_COLORS[i % BAR_COLORS.length]}"/>`);
+    // Label above its bar (left-aligned with the common start line), clear of the unit ticks.
+    out.push(svgText(x0, y - 8, labels[i], 6, 'text-anchor="start" font-weight="700"'));
+    out.push(`<rect x="${x0}" y="${y - 4}" width="${r1(len * scale)}" height="9" rx="2" fill="${BAR_COLORS[i % BAR_COLORS.length]}"/>`);
     if (unit > 0) {
       for (let k = 0; k <= maxLen; k++) {
-        out.push(`<line x1="${r1(24 + k * scale)}" y1="${y - 6}" x2="${r1(24 + k * scale)}" y2="${y + 7}" stroke="#475569" stroke-width="0.6"/>`);
+        out.push(`<line x1="${r1(x0 + k * scale)}" y1="${y - 6}" x2="${r1(x0 + k * scale)}" y2="${y + 7}" stroke="#475569" stroke-width="0.6"/>`);
       }
     }
   });
@@ -1802,6 +1890,15 @@ function shapeSvg(def: ShapeDef, rot: number, size: number): string {
   return svgWrap(def.draw(rot, size));
 }
 
+/**
+ * Names that are ALSO true of a drawn `shown` shape: a square is a rectangle
+ * and a rhombus too (the drawn rectangle and rhombus are never squares). Such
+ * a name can never be a distractor, nor such a shape a "not a …" answer.
+ */
+function alsoNames(shown: string): string[] {
+  return shown === "square" ? ["rectangle", "rhombus"] : [];
+}
+
 const shapesAttributes: Generator = (ctx) => {
   const { rng } = ctx;
   const level = levelOf(ctx);
@@ -1849,7 +1946,8 @@ const shapesAttributes: Generator = (ctx) => {
     if (variant === 0) {
       const target = pick(rng, ["rhombus", "rectangle", "square", "trapezoid"]);
       const def = SHAPES.find((s) => s.name === target) as ShapeDef;
-      const others = sample(rng, SHAPES.filter((s) => s.name !== target && s.name !== (target === "square" ? "rhombus" : "")), 3);
+      // A square is also a rectangle and a rhombus, so it can't be a wrong option for those.
+      const others = sample(rng, SHAPES.filter((s) => s.name !== target && s.name !== (target === "square" ? "rhombus" : "") && !alsoNames(s.name).includes(target)), 3);
       return optionChoice(rng, { svg: shapeSvg(def, rot, size) }, others.map((o) => ({ svg: shapeSvg(o, rot, size) })), {
         prompt: `Which shape is a ${target}?`,
         display: { speak: `Which shape is a ${target}?` },
@@ -1949,7 +2047,7 @@ const shapesAttributes: Generator = (ctx) => {
       };
     }
     const answer = def.name;
-    return labelChoice(rng, answer, sample(rng, pool.filter((s) => s.name !== answer).map((s) => s.name), 3), {
+    return labelChoice(rng, answer, sample(rng, pool.filter((s) => s.name !== answer && !alsoNames(answer).includes(s.name)).map((s) => s.name), 3), {
       prompt: "What is the name of this shape?",
       display: { svg: shapeSvg(def, rot, size), speak: "What is the name of this shape?" },
       explain: `It has ${def.sides} sides, so it is a ${def.name}.${def.sides === 4 ? " Four-sided shapes are quadrilaterals." : ""}`,
@@ -1961,7 +2059,7 @@ const shapesAttributes: Generator = (ctx) => {
   const pool = SHAPES.filter((s) => ["triangle", "square", "rectangle", "hexagon", "circle", "trapezoid"].includes(s.name));
   const def = pick(rng, pool);
   if (variant === 0) {
-    return labelChoice(rng, def.name, sample(rng, pool.filter((s) => s.name !== def.name).map((s) => s.name), 3), {
+    return labelChoice(rng, def.name, sample(rng, pool.filter((s) => s.name !== def.name && !alsoNames(def.name).includes(s.name)).map((s) => s.name), 3), {
       prompt: "What shape is this?",
       display: { svg: shapeSvg(def, rot, size), speak: "What shape is this?" },
       explain: def.sides === 0 ? "A circle is perfectly round with no straight sides and no corners." : `It has ${def.sides} straight sides and ${def.sides} corners: a ${def.name}. Turning it or making it bigger does not change its name.`,
@@ -1981,7 +2079,8 @@ const shapesAttributes: Generator = (ctx) => {
   }
   if (variant === 2) {
     const target = pick(rng, pool.filter((s) => s.sides > 0));
-    const notIt = pick(rng, pool.filter((s) => s.name !== target.name));
+    // A square is a rectangle too, so it can't be the odd one out among rectangles.
+    const notIt = pick(rng, pool.filter((s) => s.name !== target.name && !alsoNames(s.name).includes(target.name)));
     const same = [0, 1, 2].map((k) => ({ svg: shapeSvg(target, (rot + k * 40) % 360, size - k * 4) }));
     return optionChoice(rng, { svg: shapeSvg(notIt, rot, size) }, same, {
       prompt: `Which one is NOT a ${target.name}?`,
@@ -2103,6 +2202,43 @@ const WP_GROUPS: Record<string, WpType[]> = {
   compare: ["cmpDiff", "cmpBigger", "cmpSmaller"],
 };
 
+/** "1 inch", "12 inches", "5 cm", "1 meter". */
+function lengthUnit(unit: string): (n: number) => string {
+  const one = unit === "inches" ? "inch" : unit === "meters" ? "meter" : unit;
+  return (n: number) => `${n} ${n === 1 ? one : unit}`;
+}
+
+/**
+ * Length stories (2.M.B.5): ribbon verbs (ties on / cuts off / longer than)
+ * instead of the item scenes, and the unit on every number.
+ */
+function lengthStory(type: WpType, len: (n: number) => string, name: string, other: string, n: { part: number; rest: number; total: number; big: number; small: number; diff: number }): Question {
+  const { part, rest, total, big, small, diff } = n;
+  const q = (prompt: string, answer: number, explain: string, hint: string): Question => ({ type: "numeric", prompt, answer, display: { emoji: "🎀", speak: prompt }, explain, hint });
+  switch (type) {
+    case "joinResult":
+      return q(`${name} has a ribbon that is ${len(part)} long. ${name} ties on ${len(rest)} more. How long is the ribbon now?`, total, `Join story: part + part = whole. ${part} + ${rest} = ${total}, so the ribbon is ${len(total)} long.`, "Some ribbon was there, then more was tied on. Add the two lengths.");
+    case "joinChange":
+      return q(`${name} has a ribbon that is ${len(part)} long. ${name} ties on another piece, and now the ribbon is ${len(total)} long. How long is the piece ${name} tied on?`, rest, `Number sentence: ${part} + ? = ${total}. Count up from ${part} to ${total}, or subtract: ${total} − ${part} = ${rest}. The piece is ${len(rest)} long.`, `Start at ${part} and count up to ${total}. The jump is the missing piece.`);
+    case "joinStart":
+      return q(`${name} has a ribbon. ${name} ties on ${len(rest)} more, and now it is ${len(total)} long. How long was the ribbon at the start?`, part, `Number sentence: ? + ${rest} = ${total}. Take away the piece that was added: ${total} − ${rest} = ${part}. It was ${len(part)} long.`, "The whole length is known and one piece is known. Take the known piece away from the whole.");
+    case "sepResult":
+      return q(`${name} has ${len(total)} of ribbon. ${name} cuts off ${len(part)}. How much ribbon is left?`, rest, `Take-away story: whole − part = part. ${total} − ${part} = ${rest}, so ${len(rest)} of ribbon is left.`, "Start with the whole length and take away the piece that was cut off.");
+    case "sepChange":
+      return q(`${name} has ${len(total)} of ribbon. ${name} cuts some off, and ${len(rest)} is left. How much did ${name} cut off?`, part, `Number sentence: ${total} − ? = ${rest}. The missing part is ${total} − ${rest} = ${part} (or count up from ${rest} to ${total}). ${name} cut off ${len(part)}.`, `Count up from ${rest} to ${total}, or subtract what is left from the whole length.`);
+    case "pwTotal":
+      return q(`${name} has a red ribbon that is ${len(part)} long and a blue ribbon that is ${len(rest)} long. How long are the two ribbons together?`, total, `Put-together story: part + part = whole. ${part} + ${rest} = ${total}, so together they are ${len(total)} long.`, "Two ribbons put end to end. Add the lengths.");
+    case "pwPart":
+      return q(`${name} has ${len(total)} of ribbon. ${len(part)} of it is red and the rest is blue. How much of the ribbon is blue?`, rest, `Whole − known part = other part. ${total} − ${part} = ${rest}, so ${len(rest)} is blue. (Check: ${part} + ${rest} = ${total}.)`, "You know the whole length and one part. Subtract to find the other part.");
+    case "cmpDiff":
+      return q(`${name}'s ribbon is ${len(big)} long. ${other}'s ribbon is ${len(small)} long. How much longer is ${name}'s ribbon?`, diff, `Compare story: the difference is longer − shorter. ${big} − ${small} = ${diff}, so ${name}'s ribbon is ${len(diff)} longer. Line the ribbons up: the longer one sticks out by that much.`, "Line the two ribbons up at one end. The extra piece of the longer ribbon is the answer.");
+    case "cmpBigger":
+      return q(`${other}'s ribbon is ${len(small)} long. ${name}'s ribbon is ${len(diff)} longer than ${other}'s. How long is ${name}'s ribbon?`, big, `"${len(diff)} longer than ${len(small)}" means add: ${small} + ${diff} = ${big}. ${name}'s ribbon is ${len(big)} long.`, `${name}'s ribbon is longer. Start with ${other}'s length and add the extra.`);
+    default:
+      return q(`${name}'s ribbon is ${len(big)} long. That is ${len(diff)} longer than ${other}'s ribbon. How long is ${other}'s ribbon?`, small, `${name}'s ribbon is the longer one, so ${other}'s is ${len(diff)} shorter: ${big} − ${diff} = ${small}. It is ${len(small)} long. (Check: ${small} + ${diff} = ${big}.)`, `Careful: "longer" is in the story, but ${other}'s ribbon is SHORTER. Take the difference away from the longer length.`);
+  }
+}
+
 const wordProblemJoinSeparateCompare: Generator = (ctx) => {
   const { rng } = ctx;
   const max = numParam(ctx, "max", 20);
@@ -2128,6 +2264,31 @@ const wordProblemJoinSeparateCompare: Generator = (ctx) => {
     let take = int(rng, 3, Math.min(start + add - 1, 30));
     for (let guard = 0; guard < 5 && [start, add, take].includes(start + add - take); guard++) take = take > 3 ? take - 1 : take + 1;
     const kind = rng() < 0.5 ? "addThenTake" : "takeTwice";
+    if (theme === "length") {
+      const len = lengthUnit(unit);
+      let take2 = 0;
+      if (kind === "takeTwice") {
+        take2 = int(rng, 2, Math.max(2, start + add - take - 1));
+        for (let guard = 0; guard < 5 && [start + add, take, take2].includes(start + add - take - take2); guard++) take2 = take2 > 2 ? take2 - 1 : take2 + 1;
+      }
+      const whole = kind === "addThenTake" ? start : start + add;
+      const answer = kind === "addThenTake" ? start + add - take : start + add - take - take2;
+      const prompt =
+        kind === "addThenTake"
+          ? `${name} has ${len(start)} of ribbon. ${name} ties on ${len(add)} more, then cuts off ${len(take)}. How much ribbon does ${name} have now?`
+          : `${name} has ${len(whole)} of ribbon. ${name} gives ${len(take)} to ${other} and cuts off ${len(take2)} for a bow. How much ribbon is left?`;
+      return {
+        type: "numeric",
+        prompt,
+        answer,
+        display: { emoji: "🎀", speak: prompt },
+        explain:
+          kind === "addThenTake"
+            ? `Two steps. Step 1: ${start} + ${add} = ${start + add}. Step 2: ${start + add} − ${take} = ${answer}. ${name} has ${len(answer)} of ribbon.`
+            : `Two steps. Step 1: ${whole} − ${take} = ${whole - take}. Step 2: ${whole - take} − ${take2} = ${answer}. ${len(answer)} of ribbon is left.`,
+        hint: "Do the first thing that happens, write the new length, then do the second thing.",
+      };
+    }
     if (kind === "addThenTake") {
       return {
         type: "numeric",
@@ -2152,6 +2313,7 @@ const wordProblemJoinSeparateCompare: Generator = (ctx) => {
 
   const group = pick(rng, typeNames.filter((g) => WP_GROUPS[g]));
   const type = pick(rng, WP_GROUPS[group] ?? WP_GROUPS.join);
+  if (theme === "length") return lengthStory(type, lengthUnit(unit), name, other, { part, rest, total, big, small, diff });
   const em = { emoji: scene.emoji };
   switch (type) {
     case "joinResult":
@@ -2412,10 +2574,14 @@ function barGraphSvg(labels: string[], values: number[], scale: number): string 
     out.push(`<line x1="${x0}" y1="${y}" x2="98" y2="${y}" stroke="#e2e8f0" stroke-width="0.6"/>`);
     out.push(svgText(x0 - 3, y + 2, String(v), 5, 'text-anchor="end"'));
   }
+  // A label wider than its column (about 2.75 units per letter at size 5, e.g.
+  // "basketball" in a 20-unit column) would run into its neighbours: put every
+  // other label on a second row.
+  const stagger = labels.some((l) => l.length * 2.75 > w * 0.95);
   values.forEach((v, i) => {
     const bh = r1((v / top) * h);
     out.push(`<rect x="${r1(x0 + i * w + w * 0.2)}" y="${r1(72 - bh)}" width="${r1(w * 0.6)}" height="${bh}" fill="${BAR_COLORS[i % BAR_COLORS.length]}"/>`);
-    out.push(svgText(x0 + i * w + w / 2, 80, labels[i], 5));
+    out.push(svgText(x0 + i * w + w / 2, stagger && i % 2 === 1 ? 88 : 80, labels[i], 5));
   });
   return svgWrap(out.join(""));
 }
@@ -2443,12 +2609,14 @@ const dataPictureGraph: Generator = (ctx) => {
       "Which pony color do my friends like best?",
       "How many letters are in each friend's name?",
     ];
-    const bad = ["Is purple a pretty color?", "What will happen next year?", "Why is the sky blue?", "Is ballet fun?"];
+    // None of these can be answered by asking classmates and counting their answers
+    // (a yes/no opinion like "Is ballet fun?" could be — ask everyone, count the yeses).
+    const bad = ["How many fish live in the ocean?", "What will happen next year?", "Why is the sky blue?", "How tall will I be when I grow up?"];
     const answer = pick(rng, good);
     return labelChoice(rng, answer, sample(rng, bad, 3), {
       prompt: "Which question can be answered by collecting data from classmates?",
       display: { speak: "Which question can be answered by collecting data from classmates?" },
-      explain: `"${answer}" — you can ask each classmate, record every answer, and count. Data is information we collect to answer a question. Opinions like "is it pretty" and guesses about the future cannot be counted this way.`,
+      explain: `"${answer}" — you can ask each classmate, write down every answer, and count. Data is information we collect to answer a question. The other questions are about the future or about facts your classmates cannot know, so asking them and counting would not answer them.`,
       hint: "Could you ask each friend and write down a countable answer?",
     });
   }
@@ -2456,19 +2624,23 @@ const dataPictureGraph: Generator = (ctx) => {
   const i = int(rng, 0, cats.length - 1);
   let j = int(rng, 0, cats.length - 1);
   if (j === i) j = (i + 1) % cats.length;
+  // "How many more" needs two different counts (equal bars would make it 0).
+  if (values[j] === values[i]) {
+    const k = values.findIndex((v) => v !== values[i]);
+    if (k >= 0) j = k;
+  }
   const total = values.reduce((s, v) => s + v, 0);
   const keyNote = scaled ? ` Each picture stands for ${scale}, so count by ${scale}s.` : "";
-  if (variant === 0) {
-    return {
-      type: "numeric",
-      prompt: `${title} How many chose ${labels[i]}?`,
-      answer: values[i],
-      display: { ...display, speak: `${title} How many chose ${labels[i]}?` },
-      explain: `Find the ${labels[i]} row and count.${keyNote} ${values[i] / scale} pictures${scaled ? ` × ${scale}` : ""} = ${values[i]}.`,
-      hint: `Find the row for ${labels[i]}.${scaled ? ` Each picture = ${scale}.` : " Count the pictures."}`,
-    };
-  }
-  if (variant === 1) {
+  const howMany = (): Question => ({
+    type: "numeric",
+    prompt: `${title} How many chose ${labels[i]}?`,
+    answer: values[i],
+    display: { ...display, speak: `${title} How many chose ${labels[i]}?` },
+    explain: `Find the ${labels[i]} row and count.${keyNote} ${values[i] / scale} pictures${scaled ? ` × ${scale}` : ""} = ${values[i]}.`,
+    hint: `Find the row for ${labels[i]}.${scaled ? ` Each picture = ${scale}.` : " Count the pictures."}`,
+  });
+  if (variant === 0) return howMany();
+  if (variant === 1 && values[i] !== values[j]) {
     const hi = values[i] >= values[j] ? i : j;
     const lo = hi === i ? j : i;
     return {
@@ -2480,7 +2652,7 @@ const dataPictureGraph: Generator = (ctx) => {
       hint: "Find both numbers, then subtract the smaller from the bigger.",
     };
   }
-  if (variant === 2) {
+  if (variant === 1 || variant === 2) {
     return {
       type: "numeric",
       prompt: `${title} How many friends answered in all?`,
@@ -2492,14 +2664,27 @@ const dataPictureGraph: Generator = (ctx) => {
   }
   const most = rng() < 0.5;
   const target = most ? Math.max(...values) : Math.min(...values);
-  const answer = labels[values.indexOf(target)];
-  const tie = values.filter((v) => v === target).length > 1;
-  const askIdx = tie ? values.indexOf(target) : values.indexOf(target);
+  const occurs = (v: number) => values.filter((w) => w === v).length;
+  if (occurs(target) === 1) {
+    const answer = labels[values.indexOf(target)];
+    return labelChoice(rng, answer, labels.filter((l) => l !== answer), {
+      prompt: `${title} Which was chosen the ${most ? "most" : "least"}?`,
+      display: { ...display, speak: `${title} Which was chosen the ${most ? "most" : "least"}?` },
+      explain: `The ${most ? "longest" : "shortest"} row is ${answer} with ${target}. ${most ? "Most popular means the biggest" : "Least popular means the smallest"} count.`,
+      hint: `Look for the ${most ? "longest" : "shortest"} row.`,
+    });
+  }
+  // The most/least is a tie, so ask about a count only one category has
+  // (otherwise two options would be right but only one graded right).
+  const unique = values.map((_, k) => k).filter((k) => occurs(values[k]) === 1);
+  if (unique.length === 0) return howMany();
+  const askIdx = pick(rng, unique);
+  const answer = labels[askIdx];
   return labelChoice(rng, answer, labels.filter((l) => l !== answer), {
-    prompt: tie ? `${title} Which category has ${values[askIdx]}?` : `${title} Which was chosen the ${most ? "most" : "least"}?`,
-    display: { ...display, speak: tie ? `${title} Which category has ${values[askIdx]}?` : `${title} Which was chosen the ${most ? "most" : "least"}?` },
-    explain: tie ? `Count each row. ${answer} has ${values[askIdx]}.` : `The ${most ? "longest" : "shortest"} row is ${answer} with ${target}. ${most ? "Most" : "Least"} popular means the biggest${most ? "" : " — no, the smallest"} count.`,
-    hint: tie ? "Count each row carefully." : `Look for the ${most ? "longest" : "shortest"} row.`,
+    prompt: `${title} Which category has ${values[askIdx]}?`,
+    display: { ...display, speak: `${title} Which category has ${values[askIdx]}?` },
+    explain: `Count each row.${keyNote} Only ${answer} has ${values[askIdx]}.`,
+    hint: "Count each row carefully.",
   });
 };
 

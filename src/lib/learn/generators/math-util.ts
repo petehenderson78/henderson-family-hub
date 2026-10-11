@@ -249,16 +249,25 @@ export function fracAccept(n: number, d: number, equivalents = true): string[] {
     out.add(`${a}/${b}`);
     out.add(`${a} / ${b}`);
   };
+  /** Proper mixed form only ("5 3/6"): whole ≥ 1 and 0 < remainder < denominator. */
+  const addMixed = (a: number, b: number) => {
+    const whole = Math.floor(a / b);
+    const rem = a - whole * b;
+    if (whole < 1 || rem === 0) return;
+    out.add(`${whole} ${rem}/${b}`);
+    out.add(`${whole} ${rem} / ${b}`);
+  };
   add(n, d);
   if (equivalents) {
     const [sn, sd] = simplify(n, d);
-    add(sn, sd);
-    for (let k = 2; k <= 4; k++) add(sn * k, sd * k);
     if (sn % sd === 0) out.add(String(sn / sd));
-    const whole = Math.floor(sn / sd);
-    if (whole > 0 && sn % sd !== 0) {
-      out.add(`${whole} ${sn - whole * sd}/${sd}`);
-      out.add(`${whole} ${sn - whole * sd} / ${sd}`);
+    // The given form, the simplest form and its ×2..×4 multiples — each as a
+    // fraction and as a mixed number (the explanations print e.g. "9/6 = 1 3/6").
+    const forms: [number, number][] = [[n, d], [sn, sd]];
+    for (let k = 2; k <= 4; k++) forms.push([sn * k, sd * k]);
+    for (const [a, b] of forms) {
+      add(a, b);
+      addMixed(a, b);
     }
   }
   return [...out];
@@ -291,8 +300,27 @@ export function svgWrap(inner: string): string {
   return `${SVG_OPEN}${inner}</svg>`;
 }
 
+/**
+ * A <text> element. Defaults: centred, slate ink. `extra` may override
+ * text-anchor / fill (e.g. 'text-anchor="end"', 'fill="#e11d48"'); each
+ * attribute is emitted exactly once (duplicate attributes are invalid XML, and
+ * the HTML parser silently keeps the first one).
+ */
 export function svgText(x: number, y: number, text: string, size = 7, extra = ""): string {
-  return `<text x="${r1(x)}" y="${r1(y)}" text-anchor="middle" font-size="${size}" font-family="sans-serif" fill="#334155" ${extra}>${text}</text>`;
+  let anchor = "middle";
+  let fill = "#334155";
+  const rest = extra
+    .replace(/\btext-anchor="([^"]*)"/g, (_m, v: string) => {
+      anchor = v;
+      return "";
+    })
+    .replace(/(^|\s)fill="([^"]*)"/g, (_m, pre: string, v: string) => {
+      fill = v;
+      return pre;
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+  return `<text x="${r1(x)}" y="${r1(y)}" text-anchor="${anchor}" font-size="${size}" font-family="sans-serif" fill="${fill}"${rest ? " " + rest : ""}>${text}</text>`;
 }
 
 export function r1(n: number): number {
@@ -527,11 +555,21 @@ export function numberLineSvg(o: NumberLineOpts): string {
     const h = Math.min(22, Math.abs(x1 - x0) * 0.6 + 6);
     out.push(`<path d="M${r1(x0)},${y - 2} Q${r1(mid)},${r1(y - h)} ${r1(x1)},${y - 2}" fill="none" stroke="${COLORS.blue}" stroke-width="1.5"/>`);
     out.push(`<polygon points="${r1(x1)},${y - 1} ${r1(x1 + (x1 > x0 ? -3 : 3))},${y - 5} ${r1(x1 + (x1 > x0 ? -1 : 1))},${y - 7}" fill="${COLORS.blue}"/>`);
-    if (j.label) out.push(svgText(mid, y - h / 2 - 3, j.label, 6, `fill="${COLORS.blue}"`));
+    // Above the arc and above the dot labels (y − 8), so a short jump's label
+    // never sits on top of the start number.
+    if (j.label) out.push(svgText(mid, Math.min(y - h / 2 - 3, y - 15), j.label, 6, `fill="${COLORS.blue}"`));
   }
+  const placed: { x: number; y: number }[] = [];
   for (const d of o.dots ?? []) {
-    out.push(`<circle cx="${r1(x(d.at))}" cy="${y}" r="3.2" fill="${d.color ?? COLORS.rose}"/>`);
-    if (d.label) out.push(svgText(x(d.at), y - 8, d.label, 7, `fill="${d.color ?? COLORS.rose}" font-weight="700"`));
+    const dx = x(d.at);
+    out.push(`<circle cx="${r1(dx)}" cy="${y}" r="3.2" fill="${d.color ?? COLORS.rose}"/>`);
+    if (d.label) {
+      // Two labelled dots close together: lift the later label a row up.
+      let ly = y - 8;
+      while (placed.some((p) => p.y === ly && Math.abs(p.x - dx) < 10)) ly -= 8;
+      placed.push({ x: dx, y: ly });
+      out.push(svgText(dx, ly, d.label, 7, `fill="${d.color ?? COLORS.rose}" font-weight="700"`));
+    }
   }
   return svgWrap(out.join(""));
 }
@@ -626,23 +664,49 @@ export function columnAddExplain(a: number, b: number): string {
   return `Line up the places and add from the ones. ${steps.join("; ")}. ${fmt(a)} + ${fmt(b)} = ${fmt(sum)}.`;
 }
 
-/** Step-by-step standard-algorithm subtraction explanation (a >= b). */
+const PLACE_ONE = ["one", "ten", "hundred", "thousand", "ten-thousand", "hundred-thousand", "million"];
+
+function listWords(words: string[]): string {
+  return words.length <= 1 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/**
+ * Step-by-step standard-algorithm subtraction explanation (a >= b).
+ * Works on a copy of the top digits exactly like the paper algorithm: a column
+ * that lent 1 is shown with its original digit and what is left ("tens (5 lent
+ * 1, so now 4): 4 − 2 = 2"), and a regroup across zeros is chained through them ("1 hundred → 10
+ * tens, 1 ten → 10 ones"), so no step ever shows a negative digit.
+ */
 export function columnSubExplain(a: number, b: number): string {
   const diff = a - b;
   const len = String(a).length;
+  const orig = Array.from({ length: len }, (_, i) => digitAt(a, 10 ** i));
+  const top = orig.slice();
+  const bot = Array.from({ length: len }, (_, i) => digitAt(b, 10 ** i));
   const steps: string[] = [];
-  let borrow = 0;
   for (let i = 0; i < len; i++) {
-    let da = digitAt(a, 10 ** i) - borrow;
-    const db = digitAt(b, 10 ** i);
-    if (i === len - 1 && da === 0 && db === 0) break;
-    if (da < db) {
-      steps.push(`${PLACE_WORD[i]}: ${da} is less than ${db}, so regroup 1 from the ${PLACE_WORD[i + 1] ?? "next place"} → ${da + 10} − ${db} = ${da + 10 - db}`);
-      da += 10;
-      borrow = 1;
+    const db = bot[i];
+    if (i === len - 1 && top[i] === 0 && db === 0) break;
+    const lead = top[i] === orig[i] ? "" : orig[i] === 0 ? ` (the 0 became 10 and lent 1, so now ${top[i]})` : ` (${orig[i]} lent 1, so now ${top[i]})`;
+    const w = top[i];
+    if (w < db) {
+      let j = i + 1;
+      while (j < len - 1 && top[j] === 0) j++;
+      let how: string;
+      if (j === i + 1) {
+        how = `, so regroup 1 from the ${PLACE_WORD[i + 1] ?? "next place"}`;
+      } else {
+        const zeros = PLACE_WORD.slice(i + 1, j);
+        const chain: string[] = [];
+        for (let k = j; k > i; k--) chain.push(`1 ${PLACE_ONE[k]} → 10 ${PLACE_WORD[k - 1]}`);
+        how = ` and the ${listWords(zeros)} ${zeros.length === 1 ? "digit is" : "digits are"} 0, so regroup from the ${PLACE_WORD[j]}: ${chain.join(", ")}`;
+      }
+      top[j] -= 1;
+      for (let k = j - 1; k > i; k--) top[k] = 9;
+      top[i] = w + 10;
+      steps.push(`${PLACE_WORD[i]}${lead}: ${w} is less than ${db}${how} → ${w + 10} − ${db} = ${w + 10 - db}`);
     } else {
-      steps.push(`${PLACE_WORD[i]}: ${da} − ${db} = ${da - db}`);
-      borrow = 0;
+      steps.push(`${PLACE_WORD[i]}${lead}: ${w} − ${db} = ${w - db}`);
     }
   }
   return `Line up the places and subtract from the ones. ${steps.join("; ")}. ${fmt(a)} − ${fmt(b)} = ${fmt(diff)}.`;

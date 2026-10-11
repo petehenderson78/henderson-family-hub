@@ -863,7 +863,7 @@ export const COLE_MATH_SKILLS: Skill[] = [
     standards: ["4.G.A.1", "4.G.A.2"],
     prereqs: ["m3.g.quads", "m4.m.angles.classify"],
     generator: "geometryClassify",
-    params: { grade: 4 },
+    params: { grade: 4, mode: "classify" },
     estMinutes: 8,
     testOut: true,
     parentTip: "Find parallel lines (train tracks) and perpendicular lines (window corners) around the house; name triangles by their biggest angle.",

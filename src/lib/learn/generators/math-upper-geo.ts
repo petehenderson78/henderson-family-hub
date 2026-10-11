@@ -308,13 +308,18 @@ const areaPerimeter: Generator = (ctx) => {
     };
   }
   if (variant === 1) {
-    const answer = `${w + 1} by ${h - 1}`;
-    const wrong = [`${w} by ${h + 1}`, `${w + 2} by ${h}`, `${w - 1} by ${h - 1}`].filter((x) => x !== answer);
     if (h - 1 < 1) return areaPerimeter({ ...ctx, params: { ...(ctx.params ?? {}), mode: "area" } });
+    // (w+1) by (h-1) is the SAME rectangle turned sideways when h = w + 1 (5 by 6 → 6 by 5):
+    // shift by 2 instead so the area really differs.
+    const shift = (w + 1) * (h - 1) === w * h ? 2 : 1;
+    const aw = w + shift;
+    const ah = h - shift;
+    const answer = `${aw} by ${ah}`;
+    const wrong = [`${w} by ${h + 1}`, `${w + 2} by ${h}`, `${w - 1} by ${h - 1}`].filter((x) => x !== answer);
     return labelChoice(rng, answer, wrong, {
       prompt: `A rectangle is ${w} by ${h} (perimeter ${2 * (w + h)}). Which rectangle has the SAME perimeter but a DIFFERENT area?`,
       display: { svg: rectSvg(w, h, { top: String(w), left: String(h) }), speak: `A rectangle is ${w} by ${h}. Which rectangle has the same perimeter but a different area?` },
-      explain: `Same perimeter means the two sides add to the same total: ${w} + ${h} = ${w + h}, and ${w + 1} + ${h - 1} = ${w + h} too. The areas differ: ${w * h} vs ${(w + 1) * (h - 1)}.`,
+      explain: `Same perimeter means the two sides add to the same total: ${w} + ${h} = ${w + h}, and ${aw} + ${ah} = ${w + h} too. The areas differ: ${w} × ${h} = ${w * h}, but ${aw} × ${ah} = ${aw * ah}.`,
       hint: "Keep length + width the same, but change the two numbers.",
     });
   }
@@ -475,19 +480,27 @@ interface Conv {
   factor: number;
   bigPl: string;
   smallPl: string;
+  /** what is measured in this unit pair, and what someone does with part of it */
+  stuff: string;
+  uses: string;
 }
 
 const CONVS: Conv[] = [
-  { big: "km", small: "m", factor: 1000, bigPl: "kilometers", smallPl: "meters" },
-  { big: "m", small: "cm", factor: 100, bigPl: "meters", smallPl: "centimeters" },
-  { big: "kg", small: "g", factor: 1000, bigPl: "kilograms", smallPl: "grams" },
-  { big: "L", small: "mL", factor: 1000, bigPl: "liters", smallPl: "milliliters" },
-  { big: "ft", small: "in", factor: 12, bigPl: "feet", smallPl: "inches" },
-  { big: "yd", small: "ft", factor: 3, bigPl: "yards", smallPl: "feet" },
-  { big: "lb", small: "oz", factor: 16, bigPl: "pounds", smallPl: "ounces" },
-  { big: "min", small: "s", factor: 60, bigPl: "minutes", smallPl: "seconds" },
-  { big: "hr", small: "min", factor: 60, bigPl: "hours", smallPl: "minutes" },
+  { big: "km", small: "m", factor: 1000, bigPl: "kilometers", smallPl: "meters", stuff: "trail to hike", uses: "hikes" },
+  { big: "m", small: "cm", factor: 100, bigPl: "meters", smallPl: "centimeters", stuff: "ribbon", uses: "cuts off" },
+  { big: "kg", small: "g", factor: 1000, bigPl: "kilograms", smallPl: "grams", stuff: "pony feed", uses: "scoops out" },
+  { big: "L", small: "mL", factor: 1000, bigPl: "liters", smallPl: "milliliters", stuff: "water", uses: "pours out" },
+  { big: "ft", small: "in", factor: 12, bigPl: "feet", smallPl: "inches", stuff: "rope", uses: "cuts off" },
+  { big: "yd", small: "ft", factor: 3, bigPl: "yards", smallPl: "feet", stuff: "ribbon", uses: "cuts off" },
+  { big: "lb", small: "oz", factor: 16, bigPl: "pounds", smallPl: "ounces", stuff: "oats", uses: "feeds the ponies" },
+  { big: "min", small: "s", factor: 60, bigPl: "minutes", smallPl: "seconds", stuff: "practice time", uses: "uses" },
+  { big: "hr", small: "min", factor: 60, bigPl: "hours", smallPl: "minutes", stuff: "practice time", uses: "uses" },
 ];
+
+/** "inches" → "inch", "feet" → "foot", "seconds" → "second". */
+function singularUnit(pl: string): string {
+  return pl === "inches" ? "inch" : pl === "feet" ? "foot" : pl.replace(/s$/, "");
+}
 
 const unitConversions: Generator = (ctx) => {
   const { rng } = ctx;
@@ -541,9 +554,9 @@ const unitConversions: Generator = (ctx) => {
   }
   return {
     type: "numeric",
-    prompt: `${name} has ${whole} ${c.big} of ${pick(rng, ["ribbon", "rope", "pony-feed", "water", "practice time"])} and uses ${cutVal} ${c.small}. How many ${c.small} are left?`,
+    prompt: `${name} has ${whole} ${c.big} of ${c.stuff} and ${c.uses} ${cutVal} ${c.small}. How many ${c.small} are left?`,
     answer: total,
-    display: { speak: `${name} has ${whole} ${c.bigPl} and uses ${cutVal} ${c.smallPl}. How many ${c.smallPl} are left?` },
+    display: { speak: `${name} has ${whole} ${c.bigPl} of ${c.stuff} and ${c.uses} ${cutVal} ${cutVal === 1 ? singularUnit(c.smallPl) : c.smallPl}. How many ${c.smallPl} are left?` },
     explain: `Convert to the smaller unit first: ${whole} ${c.big} = ${whole * c.factor} ${c.small}. Then subtract: ${whole * c.factor} − ${cutVal} = ${total} ${c.small}.`,
     hint: "Put both amounts in the same unit before subtracting.",
   };
@@ -662,7 +675,8 @@ const coordinatePlane: Generator = (ctx) => {
     });
   }
   if (variant === 2) {
-    const dx = int(rng, 1, 9 - x);
+    // The grid runs to 10 and x <= 9, so there is always room for a move of at least 1.
+    const dx = int(rng, 1, 10 - x);
     return {
       type: "numeric",
       prompt: `A point is at (${x}, ${y}). It moves ${dx} units to the right. What is its new x-coordinate?`,
@@ -687,6 +701,11 @@ const coordinatePlane: Generator = (ctx) => {
 // dataLinePlot — 2.DL.B.3 (whole), 3.DL.B.4, 4.DL.B.5, 5.DL.B.5 (fractions)
 // ---------------------------------------------------------------------------
 
+/** Unit word after a line-plot length: "1 inch", "3/4 inch", but "1 1/2 inches", "2 inches". */
+function inches(amount: string): string {
+  return amount === "1" || /^\d+\/\d+$/.test(amount) ? "inch" : "inches";
+}
+
 const dataLinePlot: Generator = (ctx) => {
   const { rng } = ctx;
   const fractions = ctx.params?.fractions !== false && numParam(ctx, "grade", 3) >= 3;
@@ -704,7 +723,11 @@ const dataLinePlot: Generator = (ctx) => {
     } else labels.push(String(i + 3));
   }
   const counts = labels.map(() => int(rng, 0, 4));
-  if (counts.reduce((s, c) => s + c, 0) === 0) counts[1] = 2;
+  // A fraction scale starts at 0, and nothing measures 0 inches: no marks above the 0 tick.
+  const first = fractions ? 1 : 0;
+  if (fractions) counts[0] = 0;
+  // At least two different lengths, so "longest minus shortest" is never 0.
+  for (let i = first; counts.filter((c) => c > 0).length < 2 && i < counts.length; i++) if (counts[i] === 0) counts[i] = 1 + (i % 3);
   const svg = linePlotSvg(labels, counts, `${thing[0]} lengths (${thing[1]})`);
   const total = counts.reduce((s, c) => s + c, 0);
   const variant = int(rng, 0, ops ? 3 : 2);
@@ -713,9 +736,9 @@ const dataLinePlot: Generator = (ctx) => {
   if (variant === 0) {
     return {
       type: "numeric",
-      prompt: `Each ✕ is one ${thing[0]}. How many ${thing[2]} measured ${labels[iPick]} ${labels[iPick] === "1" ? "inch" : thing[1]}?`,
+      prompt: `Each ✕ is one ${thing[0]}. How many ${thing[2]} measured ${labels[iPick]} ${inches(labels[iPick])}?`,
       answer: counts[iPick],
-      display: { svg, speak: `Each X is one ${thing[0]}. How many measured ${labels[iPick]} ${thing[1]}?` },
+      display: { svg, speak: `Each X is one ${thing[0]}. How many measured ${labels[iPick]} ${inches(labels[iPick])}?` },
       explain: `Find ${labels[iPick]} on the number line and count the ✕ marks above it: ${counts[iPick]}.`,
       hint: `Find the tick labelled ${labels[iPick]}. Count the X marks stacked above it.`,
     };
@@ -740,7 +763,7 @@ const dataLinePlot: Generator = (ctx) => {
         prompt: `What is the difference between the longest and shortest ${thing[0]} (in ${thing[1]})?`,
         answer: diff,
         display: { svg, speak: `What is the difference between the longest and shortest ${thing[0]}?` },
-        explain: `Longest: ${labels[maxIdx]}. Shortest: ${labels[minIdx]}. Difference: ${labels[maxIdx]} − ${labels[minIdx]} = ${diff} ${thing[1]}.`,
+        explain: `Longest: ${labels[maxIdx]}. Shortest: ${labels[minIdx]}. Difference: ${labels[maxIdx]} − ${labels[minIdx]} = ${diff} ${inches(String(diff))}.`,
         hint: "Find the right-most and left-most X marks. Subtract their values.",
       };
     }
@@ -755,7 +778,7 @@ const dataLinePlot: Generator = (ctx) => {
     return labelChoice(rng, answerLabel, wrongLabels, {
       prompt: `What is the difference between the longest and shortest ${thing[0]} (in ${thing[1]})?`,
       display: { svg, speak: `What is the difference between the longest and shortest ${thing[0]}?` },
-      explain: `Longest: ${labels[maxIdx]}. Shortest: ${labels[minIdx]}. Subtract (same denominator ${d}): ${maxIdx}/${d} − ${minIdx}/${d} = ${diff}/${d} = ${answerLabel} ${thing[1]}.`,
+      explain: `Longest: ${labels[maxIdx]}. Shortest: ${labels[minIdx]}. Subtract (same denominator ${d}): ${maxIdx}/${d} − ${minIdx}/${d} = ${diff}/${d} = ${answerLabel} ${inches(answerLabel)}.`,
       hint: "Find the right-most and left-most X. Write both as fractions with the same denominator and subtract.",
     });
   }
@@ -763,9 +786,9 @@ const dataLinePlot: Generator = (ctx) => {
   const answerLabel = mixed(totalLen, d);
   const wrongs = [mixed(totalLen + 1, d), mixed(counts[iPick] + iPick, d), mixed(totalLen, d * 2 === d ? d + 1 : d * 2)].filter((w) => w !== answerLabel);
   return labelChoice(rng, answerLabel, [...new Set(wrongs)], {
-    prompt: `If you laid all the ${thing[2]} that measure ${labels[iPick]} ${thing[1]} end to end, how long would they be (in ${thing[1]})?`,
-    display: { svg, speak: `If you laid all the ${thing[0]}s that measure ${labels[iPick]} ${thing[1]} end to end, how long would they be?` },
-    explain: `There are ${counts[iPick]} of them, each ${labels[iPick]}: ${counts[iPick]} × ${iPick}/${d} = ${totalLen}/${d} = ${answerLabel} ${thing[1]}.`,
+    prompt: `If you laid all the ${thing[2]} that measure ${labels[iPick]} ${inches(labels[iPick])} end to end, how long would they be (in ${thing[1]})?`,
+    display: { svg, speak: `If you laid all the ${thing[2]} that measure ${labels[iPick]} ${inches(labels[iPick])} end to end, how long would they be?` },
+    explain: `There are ${counts[iPick]} of them, each ${labels[iPick]}: ${counts[iPick]} × ${iPick}/${d} = ${totalLen}/${d} = ${answerLabel} ${inches(answerLabel)}.`,
     hint: "Count the X marks at that length, then multiply by the length (or add it that many times).",
   });
 };
@@ -793,8 +816,20 @@ function figureSvg(kind: "line" | "segment" | "ray", rot: number): string {
   return svgWrap(`<g transform="rotate(${rot} 50 50)">${inner}</g>`);
 }
 
+/**
+ * Angles (degrees): right 90 / 42.5 / 47.5; acute 62.7 / 62.7 / 54.7;
+ * obtuse 125.5 / 26.6 / 27.9 (the apex sits outside the base span, so the
+ * angle at (60,75) is wider than 90°). Every corner is within 43 of (50,50),
+ * so any rotation stays inside the viewBox.
+ */
+const TRIANGLE_POINTS: Record<"right" | "acute" | "obtuse", string> = {
+  right: "20,80 80,80 20,25",
+  acute: "20,80 80,80 50,22",
+  obtuse: "15,75 60,75 85,40",
+};
+
 function triangleSvg(kind: "right" | "acute" | "obtuse", rot: number): string {
-  const pts = kind === "right" ? "20,80 80,80 20,25" : kind === "acute" ? "20,80 80,80 50,22" : "15,75 85,75 70,40";
+  const pts = TRIANGLE_POINTS[kind];
   return svgWrap(`<g transform="rotate(${rot} 50 50)"><polygon points="${pts}" fill="#c7d2fe" stroke="#4338ca" stroke-width="2.5" stroke-linejoin="round"/></g>`);
 }
 
@@ -815,8 +850,10 @@ function symmetrySvg(shape: "square" | "rectangle" | "triangle" | "heart", axis:
 const geometryClassify: Generator = (ctx) => {
   const { rng } = ctx;
   const level = Math.max(levelOf(ctx), numParam(ctx, "grade", 4));
+  // Grade 4 modes: "classify" = lines / figures / triangles (4.G.A.1-2), "symmetry" = lines of symmetry (4.G.A.3), "mixed" = all.
+  const mode = strParam(ctx, "mode", "mixed");
   const rot = int(rng, 0, 11) * 15;
-  const variant = level >= 5 ? int(rng, 5, 6) : int(rng, 0, 4);
+  const variant = level >= 5 ? int(rng, 5, 6) : mode === "symmetry" ? int(rng, 3, 4) : mode === "classify" ? int(rng, 0, 2) : int(rng, 0, 4);
   if (variant === 0) {
     const kind = pick(rng, ["parallel", "perpendicular", "intersecting"] as const);
     return labelChoice(rng, kind, ["parallel", "perpendicular", "intersecting"].filter((k) => k !== kind), {
@@ -890,9 +927,11 @@ const geometryClassify: Generator = (ctx) => {
   }
   if (variant === 5) {
     const qs = [
-      ["Every square is also a …", "rectangle", ["triangle", "trapezoid", "pentagon"]],
+      // No "trapezoid" distractors: under the inclusive definition (at least one pair of parallel
+      // sides, used by Eureka / Illustrative Math) every parallelogram IS a trapezoid.
+      ["Every square is also a …", "rectangle", ["triangle", "pentagon", "hexagon"]],
       ["Every rectangle is also a …", "parallelogram", ["square", "rhombus", "triangle"]],
-      ["Every rhombus is also a …", "parallelogram", ["rectangle", "square", "trapezoid"]],
+      ["Every rhombus is also a …", "parallelogram", ["rectangle", "square", "triangle"]],
       ["Every parallelogram is also a …", "quadrilateral", ["rectangle", "rhombus", "square"]],
     ] as const;
     const q = pick(rng, qs);

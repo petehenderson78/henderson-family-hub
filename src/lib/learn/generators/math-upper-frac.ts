@@ -75,6 +75,39 @@ function fracText(n: number, d: number, base: Omit<Base, "options">, rng?: () =>
   return { type: "text", answer: sd === 1 ? String(sn) : `${sn}/${sd}`, accept: fracAccept(n, d, true), ...base };
 }
 
+/** "1 piece", "3 pieces". */
+function pieces(n: number): string {
+  return `${n} ${n === 1 ? "piece" : "pieces"}`;
+}
+
+/**
+ * Typed forms of n/d and its equivalents (the original, simplest form and its
+ * ×2..×4 multiples), each as "a/b" and "a / b", prefixed by `whole` ("" for a
+ * plain fraction, "4 " for a mixed number). Local stand-in for math-util's
+ * fracAccept, which also mixes improper and mixed forms together.
+ */
+function equivalentForms(n: number, d: number, whole: string): string[] {
+  const [sn, sd] = simplify(n, d);
+  const out = new Set<string>();
+  for (const [a, b] of [[n, d], ...[1, 2, 3, 4].map((k) => [sn * k, sd * k])]) {
+    out.add(`${whole}${a}/${b}`);
+    out.add(`${whole}${a} / ${b}`);
+  }
+  return [...out];
+}
+
+/** Round to the nearest half (benchmarks 0, 1/2, 1, 1 1/2, …). */
+function nearestHalf(x: number): number {
+  return Math.round(x * 2) / 2;
+}
+
+/** 0 → "0", 0.5 → "1/2", 3 → "3", 3.5 → "3 1/2". */
+function halfText(h: number): string {
+  const whole = Math.floor(h);
+  if (h === whole) return String(whole);
+  return whole === 0 ? "1/2" : `${whole} 1/2`;
+}
+
 function lcm(a: number, b: number): number {
   return (a * b) / gcd(a, b);
 }
@@ -139,7 +172,7 @@ const fractionOfShape: Generator = (ctx) => {
     prompt: `How many pieces of size 1/${d} make ${n}/${d}?`,
     answer: n,
     display: { svg: draw(d, shadedIdx), speak: `How many pieces of size one ${d}th make ${fracWords(n, d)}?` },
-    explain: `${n}/${d} is built from unit fractions: ${Array.from({ length: n }, () => `1/${d}`).join(" + ")} = ${n}/${d}. That is ${n} pieces.`,
+    explain: `${n}/${d} is built from unit fractions: ${Array.from({ length: n }, () => `1/${d}`).join(" + ")} = ${n}/${d}. That is ${pieces(n)}.`,
     hint: "The top number counts how many unit pieces there are.",
   };
 };
@@ -262,7 +295,7 @@ const equivalentFractions: Generator = (ctx) => {
 function compareWhyFrac(n1: number, d1: number, n2: number, d2: number): string {
   const sym = n1 * d2 > n2 * d1 ? ">" : n1 * d2 < n2 * d1 ? "<" : "=";
   if (sym === "=") return `${n1}/${d1} and ${n2}/${d2} are equivalent (same point on the number line), so they are equal.`;
-  if (d1 === d2) return `Same denominator, so the pieces are the same size: compare the numerators. ${Math.max(n1, n2)} pieces is more than ${Math.min(n1, n2)} pieces. ${n1}/${d1} ${sym} ${n2}/${d2}.`;
+  if (d1 === d2) return `Same denominator, so the pieces are the same size: compare the numerators. ${pieces(Math.max(n1, n2))} is more than ${pieces(Math.min(n1, n2))}. ${n1}/${d1} ${sym} ${n2}/${d2}.`;
   if (n1 === n2) return `Same numerator (same number of pieces), so compare piece size: ${Math.min(d1, d2)}ths are bigger pieces than ${Math.max(d1, d2)}ths. ${n1}/${d1} ${sym} ${n2}/${d2}.`;
   const half1 = n1 * 2 - d1;
   const half2 = n2 * 2 - d2;
@@ -315,7 +348,9 @@ const compareFractions: Generator = (ctx) => {
       hint: kind === "den" ? "Same denominator: just compare the top numbers." : kind === "num" ? "Same top number: the bigger the denominator, the smaller each piece." : "Is each fraction more or less than 1/2? Or rewrite both with the same denominator.",
     };
   }
-  const set: [number, number][] = [[n1, d1], [n2, d2]];
+  // Never two equal fractions in a greatest/least set (the "unlike" pair above is
+  // deliberately equivalent 15% of the time): two options would both be correct.
+  const set: [number, number][] = fracEqual(n1, d1, n2, d2) ? [[n1, d1]] : [[n1, d1], [n2, d2]];
   while (set.length < 4) {
     const d = pick(rng, denoms);
     const n = int(rng, 1, d - 1);
@@ -346,23 +381,28 @@ const addSubLikeDenominators: Generator = (ctx) => {
   const m = mode === "mixed" ? pick(rng, ["add", "sub", "decompose", "mixedNumbers", "wordproblem"]) : mode;
   const asText = rng() < 0.4;
   if (m === "decompose") {
-    const n = int(rng, 2, d - 1);
+    // A proper fraction split into two non-empty parts needs d >= 3: with d = 2 the
+    // item collapses to "1/2 + 0/2" or decomposes the whole "2/2".
+    const big = denoms.filter((x) => x >= 3);
+    const dd = d >= 3 ? d : pick(rng, big.length > 0 ? big : [3, 4, 6, 8]);
+    const n = int(rng, 2, dd - 1);
     const a = int(rng, 1, n - 1);
     if (rng() < 0.5) {
       return {
         type: "numeric",
-        prompt: `${n}/${d} = ${a}/${d} + ?/${d}`,
+        prompt: `${n}/${dd} = ${a}/${dd} + ?/${dd}`,
         answer: n - a,
-        display: { svg: barFractionSvg(d, Array.from({ length: n }, (_, i) => i)), speak: `${fracWords(n, d)} equals ${fracWords(a, d)} plus how many ${d}ths?` },
-        explain: `Same-size pieces: ${n} pieces = ${a} pieces + ${n - a} pieces. So ${n}/${d} = ${a}/${d} + ${n - a}/${d}. (Also ${n}/${d} = ${Array.from({ length: n }, () => `1/${d}`).join(" + ")}.)`,
+        display: { svg: barFractionSvg(dd, Array.from({ length: n }, (_, i) => i)), speak: `${fracWords(n, dd)} equals ${fracWords(a, dd)} plus how many ${dd}ths?` },
+        explain: `Same-size pieces: ${pieces(n)} = ${pieces(a)} + ${pieces(n - a)}. So ${n}/${dd} = ${a}/${dd} + ${n - a}/${dd}. (Also ${n}/${dd} = ${Array.from({ length: n }, () => `1/${dd}`).join(" + ")}.)`,
         hint: `Only the top numbers change. ${a} plus what makes ${n}?`,
       };
     }
-    const answer = `${a}/${d} + ${n - a}/${d}`;
-    return labelChoice(rng, answer, [`${a}/${d} + ${n - a}/${d * 2}`, `${a}/${d} × ${n - a}/${d}`, `${a}/${d} + ${n - a + 1}/${d}`, `${n}/${d} + 0/${d}`], {
-      prompt: `Which sum equals ${n}/${d}?`,
-      display: { svg: barFractionSvg(d, Array.from({ length: n }, (_, i) => i)), speak: `Which sum equals ${fracWords(n, d)}?` },
-      explain: `A fraction is a sum of smaller fractions with the same denominator: ${a}/${d} + ${n - a}/${d} = ${n}/${d}, because ${a} + ${n - a} = ${n} pieces.`,
+    const answer = `${a}/${dd} + ${n - a}/${dd}`;
+    // Every distractor is a sum that is NOT n/dd (no "n/dd + 0/dd", which is also correct).
+    return labelChoice(rng, answer, [`${a}/${dd} + ${n - a}/${dd * 2}`, `${a}/${dd} × ${n - a}/${dd}`, `${a}/${dd} + ${n - a + 1}/${dd}`, `${a}/${dd + 1} + ${n - a}/${dd + 1}`], {
+      prompt: `Which sum equals ${n}/${dd}?`,
+      display: { svg: barFractionSvg(dd, Array.from({ length: n }, (_, i) => i)), speak: `Which sum equals ${fracWords(n, dd)}?` },
+      explain: `A fraction is a sum of smaller fractions with the same denominator: ${a}/${dd} + ${n - a}/${dd} = ${n}/${dd}, because ${a} + ${n - a} = ${n} pieces.`,
       hint: "Keep the denominator the same and make the top numbers add up.",
     });
   }
@@ -408,27 +448,70 @@ const addSubLikeDenominators: Generator = (ctx) => {
     return fracChoice(rng, total, d, [[total + d, d], [total - 1, d], [Math.abs((big - small) * d + f1 - f2) || 1, d], [total, d * 2]], { prompt, display: { speak }, explain, hint });
   }
   const a = int(rng, 1, d - 1);
-  const b = int(rng, 1, d - 1);
+  let b = int(rng, 1, d - 1);
   const name = pickName(rng);
   const other = pickName(rng, name);
-  const add = rng() < 0.5;
-  const unitWord = pick(rng, ["pizza", "pan of brownies", "mile", "hour of practice", "yard of ribbon"]);
+  // A subtraction story needs two different proper fractions, so d = 2 is always an addition story.
+  const add = rng() < 0.5 || d < 3;
+  const unit = pick(rng, LIKE_STORIES);
   if (add) {
+    // Two people sharing ONE pizza cannot eat more than all of it.
+    if (unit.sameWhole && a + b > d) b = int(rng, 1, d - a);
     const n = a + b;
-    const prompt = `${name} ate ${a}/${d} of a ${unitWord} and ${other} ate ${b}/${d} of the same ${unitWord}. How much did they eat together?`;
-    const explain = `Same whole, same-size pieces: ${a}/${d} + ${b}/${d} = ${n}/${d}${n >= d ? ` = ${mixed(n, d)}` : ""}${simplify(n, d)[1] !== d && n < d ? ` = ${frac(...simplify(n, d))}` : ""}.`;
-    const hint = "Together means add. The pieces are the same size, so add the tops.";
+    const prompt = unit.add(name, other, `${a}/${d}`, `${b}/${d}`);
+    const explain = `Same-size pieces (${d}ths): ${a}/${d} + ${b}/${d} = ${n}/${d}${n >= d ? ` = ${mixed(n, d)}` : ""}${simplify(n, d)[1] !== d && n < d ? ` = ${frac(...simplify(n, d))}` : ""}.`;
+    const hint = "Putting the amounts together means add. The pieces are the same size, so add the tops.";
     return fracChoice(rng, n, d, [[n, d * 2], [n + 1, d], [Math.abs(a - b) || 1, d], [a * b, d]], { prompt, display: { speak: prompt }, explain, hint });
   }
-  const big = Math.max(a, b);
-  const small = Math.min(a, b) === big ? big - 1 : Math.min(a, b);
+  let big = Math.max(a, b);
+  let small = Math.min(a, b);
+  if (big === small) {
+    // a = b: nudge apart, staying inside 1..d-1 (never "used 0/d").
+    if (big < d - 1) big += 1;
+    else small -= 1;
+  }
   const n = big - small;
-  if (n === 0) return addSubLikeDenominators({ ...ctx, params: { ...(ctx.params ?? {}), mode: "add" } });
-  const prompt = `A ${unitWord} had ${big}/${d} left. ${name} used ${small}/${d} of it. How much is left now?`;
+  const prompt = unit.sub(name, `${big}/${d}`, `${small}/${d}`);
   const explain = `Take away pieces of the same size: ${big}/${d} − ${small}/${d} = ${n}/${d}${simplify(n, d)[1] !== d ? ` = ${frac(...simplify(n, d))}` : ""}.`;
-  const hint = "Used means take away. Subtract the tops; the denominator stays.";
+  const hint = "Finding what is left means take away. Subtract the tops; the denominator stays.";
   return fracChoice(rng, n, d, [[n, d * 2], [big + small, d], [n + 1, d], [small, d]], { prompt, display: { speak: prompt }, explain, hint });
 };
+
+interface LikeStory {
+  /** both amounts are parts of the SAME single whole (one pizza): their sum must be <= 1 */
+  sameWhole: boolean;
+  add: (name: string, other: string, x: string, y: string) => string;
+  sub: (name: string, big: string, small: string) => string;
+}
+
+/** Each unit carries its own verbs ("ate" a pizza, "ran" a mile, "practiced" an hour). */
+const LIKE_STORIES: LikeStory[] = [
+  {
+    sameWhole: true,
+    add: (name, other, x, y) => `${name} ate ${x} of a pizza and ${other} ate ${y} of the same pizza. How much of the pizza did they eat together?`,
+    sub: (name, big, small) => `There was ${big} of a pizza left. ${name} ate ${small} of the pizza. How much of the pizza is left now?`,
+  },
+  {
+    sameWhole: true,
+    add: (name, other, x, y) => `${name} ate ${x} of a pan of brownies and ${other} ate ${y} of the same pan. How much of the pan did they eat together?`,
+    sub: (name, big, small) => `There was ${big} of a pan of brownies left. ${name} ate ${small} of the pan. How much of the pan is left now?`,
+  },
+  {
+    sameWhole: false,
+    add: (name, other, x, y) => `${name} ran ${x} of a mile and ${other} ran ${y} of a mile. How far did they run together?`,
+    sub: (name, big, small) => `${name}'s trail is ${big} of a mile long. ${name} has run ${small} of a mile so far. How much of the trail is left?`,
+  },
+  {
+    sameWhole: false,
+    add: (name, _other, x, y) => `${name} practiced ${x} of an hour on Monday and ${y} of an hour on Tuesday. How long did ${name} practice in all?`,
+    sub: (name, big, small) => `${name} has ${big} of an hour to practice. ${name} has practiced for ${small} of an hour so far. How much practice time is left?`,
+  },
+  {
+    sameWhole: false,
+    add: (name, other, x, y) => `${name} used ${x} of a yard of ribbon and ${other} used ${y} of a yard. How much ribbon did they use together?`,
+    sub: (name, big, small) => `${name} had ${big} of a yard of ribbon and used ${small} of a yard. How much ribbon is left?`,
+  },
+];
 
 // ---------------------------------------------------------------------------
 // mixedImproper — 3.NF.A.3c (wholes), 4.NF.B.3c (convert)
@@ -483,19 +566,23 @@ const mixedImproper: Generator = (ctx) => {
   const improper = w * d + n;
   const toImproper = rng() < 0.5;
   const asText = rng() < 0.4;
+  const [simpN, simpD] = simplify(n, d);
+  const [simpImpN, simpImpD] = simplify(improper, d);
   if (toImproper) {
     const prompt = `Write ${w} ${n}/${d} as an improper fraction.`;
-    const explain = `${w} wholes = ${w} × ${d} = ${w * d} ${d}ths. Add the ${n} extra pieces: ${w * d} + ${n} = ${improper}. So ${w} ${n}/${d} = ${improper}/${d}.`;
-    const hint = `Multiply the whole number by ${d} (pieces in each whole), then add the ${n} extra pieces. Keep the denominator.`;
+    const explain = `${w} wholes = ${w} × ${d} = ${w * d} ${d}ths. Add the ${n} extra ${n === 1 ? "piece" : "pieces"}: ${w * d} + ${n} = ${improper}. So ${w} ${n}/${d} = ${improper}/${d}${simpImpD !== d ? ` = ${simpImpN}/${simpImpD} in simplest form` : ""}.`;
+    const hint = `Multiply the whole number by ${d} (pieces in each whole), then add the ${n} extra ${n === 1 ? "piece" : "pieces"}. Keep the denominator.`;
     const speak = `Write ${w} and ${fracWords(n, d)} as an improper fraction.`;
-    if (asText) return { type: "text", prompt: `${prompt} (type it like 9/7)`, answer: `${improper}/${d}`, accept: fracAccept(improper, d, false), display: { speak }, explain, hint };
+    // Any equivalent improper fraction is correct (18/8 or 9/4) — but not the mixed number itself.
+    if (asText) return { type: "text", prompt: `${prompt} (type it like 9/7)`, answer: `${improper}/${d}`, accept: equivalentForms(improper, d, ""), display: { speak }, explain, hint };
     return fracChoice(rng, improper, d, [[w + n, d], [w * d, d], [improper, d * w], [w * n, d]], { prompt, display: { speak }, explain, hint }, frac);
   }
   const prompt = `Write ${improper}/${d} as a mixed number.`;
-  const explain = `${improper} ÷ ${d} = ${w} remainder ${n}. So there are ${w} wholes and ${n}/${d} left over: ${w} ${n}/${d}.`;
+  const explain = `${improper} ÷ ${d} = ${w} remainder ${n}. So there are ${w} wholes and ${n}/${d} left over: ${w} ${n}/${d}${simpD !== d ? `, which simplifies to ${w} ${simpN}/${simpD}` : ""}.`;
   const hint = `How many whole groups of ${d} fit in ${improper}? The leftover pieces stay as a fraction.`;
   const speak = `Write ${improper} ${d}ths as a mixed number.`;
-  if (asText) return { type: "text", prompt: `${prompt} (type it like 2 1/7)`, answer: `${w} ${n}/${d}`, accept: [`${w} ${n}/${d}`, `${w} ${n} / ${d}`], display: { speak }, explain, hint };
+  // Any equivalent mixed number is correct (4 2/6 or 4 1/3) — but not an improper fraction.
+  if (asText) return { type: "text", prompt: `${prompt} (type it like 2 1/7)`, answer: `${w} ${n}/${d}`, accept: equivalentForms(n, d, `${w} `), display: { speak }, explain, hint };
   return fracChoice(rng, improper, d, [[(w + 1) * d + n, d], [w * d + (n === d - 1 ? n - 1 : n + 1), d], [n * d + w, d]], { prompt, display: { speak }, explain, hint });
 };
 
@@ -526,7 +613,7 @@ const multiplyFractionByWhole: Generator = (ctx) => {
       prompt: `${k} × ${n}/${d} = ?`,
       display: { svg: barFractionSvg(d, Array.from({ length: n }, (_, i) => i), COLORS.blue, Array.from({ length: Math.min(k - 1, 3) }, () => ({ parts: d, shaded: Array.from({ length: n }, (_, i) => i) }))), speak: `${k} times ${fracWords(n, d)}` },
       explain: `${k} groups of ${n}/${d}: multiply the top by ${k} and keep the denominator. ${k} × ${n} = ${prod}, so ${k} × ${n}/${d} = ${prod}/${d}${prod >= d ? ` = ${mixed(prod, d)}` : ""}.`,
-      hint: `${k} × ${n}/${d} is ${k} copies of ${n} pieces. Count the pieces; the piece size (denominator) stays ${d}.`,
+      hint: `${k} × ${n}/${d} is ${k} copies of ${pieces(n)}. Count the pieces; the piece size (denominator) stays ${d}.`,
     });
   }
   if (variant === 2) {
@@ -539,16 +626,17 @@ const multiplyFractionByWhole: Generator = (ctx) => {
     });
   }
   const name = pickName(rng);
+  // [verb phrase, unit (singular), group noun, unit (plural)]
   const things = pick(rng, [
-    ["each dancer drinks", "liter of water", "dancers"],
-    ["each pony eats", "bag of oats", "ponies"],
-    ["each player runs", "mile", "players"],
-    ["each recipe uses", "cup of sugar", "recipes"],
+    ["each dancer drinks", "liter of water", "dancers", "liters of water"],
+    ["each pony eats", "bag of oats", "ponies", "bags of oats"],
+    ["each player runs", "mile", "players", "miles"],
+    ["each recipe uses", "cup of sugar", "recipes", "cups of sugar"],
   ]);
   return fracChoice(rng, prod, d, [[k + n, d], [prod, d * k], [n, d * k], [k * d, n]], {
     prompt: `At ${name}'s practice, ${things[0]} ${n}/${d} ${things[1]}. How much for ${k} ${things[2]}?`,
     display: { speak: `${things[0]} ${fracWords(n, d)} ${things[1]}. How much for ${k} ${things[2]}?` },
-    explain: `Equation: ${k} × ${n}/${d} = ${prod}/${d}${prod >= d ? ` = ${mixed(prod, d)}` : ""} ${things[1]}s. ${k} equal groups of ${n} pieces of size 1/${d}.`,
+    explain: `Equation: ${k} × ${n}/${d} = ${prod}/${d}${prod >= d ? ` = ${mixed(prod, d)}` : ""} ${prod > d ? things[3] : things[1]}. ${k} equal groups of ${pieces(n)} of size 1/${d}.`,
     hint: `${k} equal groups of ${n}/${d}: multiply. Only the top number changes.`,
   });
 };
@@ -761,21 +849,26 @@ const decimalMultiply: Generator = (ctx) => {
   const { rng } = ctx;
   const variant = int(rng, 0, 2);
   if (variant === 0) {
-    const a = int(rng, 2, 9) / 10;
+    // Explanations are built from whole tenths/hundredths: a * 10 in floating point can print 448.00000000000006.
+    const at = int(rng, 2, 9);
+    const a = at / 10;
     const k = int(rng, 2, 9);
-    const p = Math.round(a * k * 10) / 10;
-    return decQuestion(rng, p, [a * k * 10, p + 1, Math.round(a * k * 100) / 100 / 10], `${decShort(a)} × ${k} = ?`, `${decShort(a)} times ${k}`, `Think ${a * 10} tenths × ${k} = ${a * 10 * k} tenths = ${decShort(p)}. Or multiply ${a * 10} × ${k} = ${a * 10 * k}, then put back the one decimal place.`, "Multiply as whole numbers, then count the decimal places in the factors and put the point back.");
+    const p = (at * k) / 10;
+    return decQuestion(rng, p, [at * k, p + 1, (at * k) / 100], `${decShort(a)} × ${k} = ?`, `${decShort(a)} times ${k}`, `Think ${at} tenths × ${k} = ${at * k} tenths = ${decShort(p)}. Or multiply ${at} × ${k} = ${at * k}, then put back the one decimal place.`, "Multiply as whole numbers, then count the decimal places in the factors and put the point back.");
   }
   if (variant === 1) {
-    const a = int(rng, 11, 29) / 10;
-    const b = int(rng, 2, 9) / 10;
-    const p = Math.round(a * b * 100) / 100;
-    return decQuestion(rng, p, [Math.round(a * b * 1000) / 100, Math.round(a * b * 10) / 100, p + 0.1], `${decShort(a)} × ${decShort(b)} = ?`, `${decShort(a)} times ${decShort(b)}`, `Multiply as whole numbers: ${a * 10} × ${b * 10} = ${a * 10 * (b * 10)}. The factors have 1 + 1 = 2 decimal places, so the product has 2: ${decShort(p)}. Check: ${decShort(a)} × ${decShort(b)} should be less than ${decShort(a)} because ${decShort(b)} < 1.`, "Ignore the points and multiply. Then count the total decimal places in both factors and place the point.");
+    const at = int(rng, 11, 29);
+    const bt = int(rng, 2, 9);
+    const a = at / 10;
+    const b = bt / 10;
+    const p = (at * bt) / 100;
+    return decQuestion(rng, p, [Math.round(a * b * 1000) / 100, Math.round(a * b * 10) / 100, p + 0.1], `${decShort(a)} × ${decShort(b)} = ?`, `${decShort(a)} times ${decShort(b)}`, `Multiply as whole numbers: ${at} × ${bt} = ${at * bt}. The factors have 1 + 1 = 2 decimal places, so the product has 2: ${decShort(p)}. Check: ${decShort(a)} × ${decShort(b)} should be less than ${decShort(a)} because ${decShort(b)} < 1.`, "Ignore the points and multiply. Then count the total decimal places in both factors and place the point.");
   }
-  const a = int(rng, 105, 995) / 100;
+  const ah = int(rng, 105, 995);
+  const a = ah / 100;
   const k = int(rng, 2, 9);
-  const p = Math.round(a * k * 100) / 100;
-  return decQuestion(rng, p, [Math.round(a * k * 10) / 100, p + 1, Math.round(a * k * 1000) / 100], `${decShort(a)} × ${k} = ?`, `${decShort(a)} times ${k}`, `${a * 100} hundredths × ${k} = ${a * 100 * k} hundredths = ${decShort(p)}. Estimate: ${Math.round(a)} × ${k} ≈ ${Math.round(a) * k}, so the point goes after the ones.`, "Multiply as if there were no point, then use an estimate to decide where the point goes.");
+  const p = (ah * k) / 100;
+  return decQuestion(rng, p, [Math.round(a * k * 10) / 100, p + 1, Math.round(a * k * 1000) / 100], `${decShort(a)} × ${k} = ?`, `${decShort(a)} times ${k}`, `${ah} hundredths × ${k} = ${ah * k} hundredths = ${decShort(p)}. Estimate: ${Math.round(a)} × ${k} ≈ ${Math.round(a) * k}, so the point goes after the ones.`, "Multiply as if there were no point, then use an estimate to decide where the point goes.");
 };
 
 const decimalDivide: Generator = (ctx) => {
@@ -783,27 +876,32 @@ const decimalDivide: Generator = (ctx) => {
   const variant = int(rng, 0, 2);
   if (variant === 0) {
     const k = int(rng, 2, 9);
-    const q = int(rng, 2, 9) / 10 + (rng() < 0.5 ? int(rng, 1, 3) : 0);
-    const n = Math.round(q * k * 10) / 10;
-    return decQuestion(rng, q, [q * 10, Math.round(q * 10) / 100, q + 1], `${decShort(n)} ÷ ${k} = ?`, `${decShort(n)} divided by ${k}`, `Share ${n * 10} tenths into ${k} equal groups: ${n * 10} ÷ ${k} = ${n * 10 / k} tenths = ${decShort(q)}. Check: ${decShort(q)} × ${k} = ${decShort(n)}.`, "Think of the dividend in tenths, divide, then write the result as tenths.");
+    const qtTenths = int(rng, 2, 9);
+    const qt = qtTenths + (rng() < 0.5 ? int(rng, 1, 3) * 10 : 0);
+    const q = qt / 10;
+    const nt = qt * k;
+    const n = nt / 10;
+    return decQuestion(rng, q, [qt, qt / 100, q + 1], `${decShort(n)} ÷ ${k} = ?`, `${decShort(n)} divided by ${k}`, `Share ${nt} tenths into ${k} equal groups: ${nt} ÷ ${k} = ${qt} tenths = ${decShort(q)}. Check: ${decShort(q)} × ${k} = ${decShort(n)}.`, "Think of the dividend in tenths, divide, then write the result as tenths.");
   }
   if (variant === 1) {
-    const b = int(rng, 2, 9) / 10;
+    const bt = int(rng, 2, 9);
+    const b = bt / 10;
     const q = int(rng, 2, 12);
-    const n = Math.round(b * q * 10) / 10;
+    const n = (bt * q) / 10;
     return {
       type: "numeric",
       prompt: `${decShort(n)} ÷ ${decShort(b)} = ?`,
       answer: q,
       display: { speak: `${decShort(n)} divided by ${decShort(b)}` },
-      explain: `How many ${decShort(b)}s are in ${decShort(n)}? Multiply both by 10 to get whole numbers: ${n * 10} ÷ ${b * 10} = ${q}. Check: ${q} × ${decShort(b)} = ${decShort(n)}.`,
+      explain: `How many ${decShort(b)}s are in ${decShort(n)}? Multiply both by 10 to get whole numbers: ${bt * q} ÷ ${bt} = ${q}. Check: ${q} × ${decShort(b)} = ${decShort(n)}.`,
       hint: "Multiply both numbers by ten (move each decimal point one place right) so the divisor is a whole number. The quotient does not change.",
     };
   }
   const k = int(rng, 2, 9);
-  const q = int(rng, 105, 995) / 100;
-  const n = Math.round(q * k * 100) / 100;
-  return decQuestion(rng, q, [Math.round(q * 10) / 100, q + 1, Math.round(q * 1000) / 100], `${decShort(n)} ÷ ${k} = ?`, `${decShort(n)} divided by ${k}`, `${n * 100} hundredths ÷ ${k} = ${n * 100 / k} hundredths = ${decShort(q)}. Estimate first: ${decShort(n)} ÷ ${k} is about ${Math.round(n / k)}.`, "Divide as whole numbers (think hundredths), then place the point using an estimate.");
+  const qh = int(rng, 105, 995);
+  const q = qh / 100;
+  const n = (qh * k) / 100;
+  return decQuestion(rng, q, [Math.round(q * 10) / 100, q + 1, Math.round(q * 1000) / 100], `${decShort(n)} ÷ ${k} = ?`, `${decShort(n)} divided by ${k}`, `${qh * k} hundredths ÷ ${k} = ${qh} hundredths = ${decShort(q)}. Estimate first: ${decShort(n)} ÷ ${k} is about ${Math.round(n / k)}.`, "Divide as whole numbers (think hundredths), then place the point using an estimate.");
 };
 
 // ---------------------------------------------------------------------------
@@ -940,8 +1038,13 @@ const addSubUnlikeDenominators: Generator = (ctx) => {
   let left: string;
   let right: string;
   let steps: string;
+  /** values of the left and right operands, for the estimate check */
+  let leftVal: number;
+  let rightVal: number;
   if (add || a === b) {
     total = (w1 + w2) * l + a + b;
+    leftVal = w1 + n1 / d1;
+    rightVal = w2 + n2 / d2;
     left = useMixed ? `${w1} ${n1}/${d1}` : `${n1}/${d1}`;
     right = useMixed ? `${w2} ${n2}/${d2}` : `${n2}/${d2}`;
     steps = `Common denominator ${l}: ${n1}/${d1} = ${a}/${l} and ${n2}/${d2} = ${b}/${l}. Add: ${a}/${l} + ${b}/${l} = ${a + b}/${l}${useMixed ? `. Wholes: ${w1} + ${w2} = ${w1 + w2}` : ""}. Answer: ${mixed(total, l)}${simplify(total, l)[1] !== l ? ` = ${mixed(...simplify(total, l))}` : ""}.`;
@@ -952,6 +1055,8 @@ const addSubUnlikeDenominators: Generator = (ctx) => {
     const la = Math.max(a, b);
     const sb = Math.min(a, b);
     total = (lw - sw) * l + la - sb;
+    leftVal = lw + ln / ld;
+    rightVal = sw + sn / sd;
     left = useMixed ? `${lw} ${ln}/${ld}` : `${ln}/${ld}`;
     right = useMixed ? `${sw} ${sn}/${sd}` : `${sn}/${sd}`;
     steps = `Common denominator ${l}: ${ln}/${ld} = ${la}/${l} and ${sn}/${sd} = ${sb}/${l}. Subtract: ${la}/${l} − ${sb}/${l} = ${la - sb}/${l}${useMixed ? `. Wholes: ${lw} − ${sw} = ${lw - sw}` : ""}. Answer: ${mixed(total, l)}${simplify(total, l)[1] !== l ? ` = ${mixed(...simplify(total, l))}` : ""}.`;
@@ -971,7 +1076,11 @@ const addSubUnlikeDenominators: Generator = (ctx) => {
       op === "+"
         ? `${name} ${unit[0]} ${left} ${unit[1]} in the morning and ${right} ${unit[1]} after school. ${unit[2].replace("${name}", name)}`
         : `${name} ${unit[3]} ${left} ${unit[4]} and ${unit[5]} ${right}. How much is left?`;
-    return fracChoice(rng, total, l, distractors, { prompt, display: { speak: prompt }, explain: `${op === "+" ? "In all means add" : "Used means subtract"}. ${steps} Estimate check: ${left} is about ${a * 2 >= l ? "1/2 or more" : "less than 1/2"}.`, hint });
+    // Benchmark estimate (5.NF.A.2): round each operand to the nearest half, then do the same operation.
+    const lh = nearestHalf(leftVal);
+    const rh = nearestHalf(rightVal);
+    const estimate = `Estimate check: ${left} is about ${halfText(lh)} and ${right} is about ${halfText(rh)}, so the answer should be about ${halfText(op === "+" ? lh + rh : lh - rh)}.`;
+    return fracChoice(rng, total, l, distractors, { prompt, display: { speak: prompt }, explain: `${op === "+" ? "In all means add" : "Left means subtract"}. ${steps} ${estimate}`, hint });
   }
   const prompt = `${left} ${op} ${right} = ?`;
   const speak = `${left.replace("/", " over ")} ${op === "+" ? "plus" : "minus"} ${right.replace("/", " over ")}`;

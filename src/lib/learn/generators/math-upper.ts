@@ -35,6 +35,25 @@ function digitsOf(n: number): number[] {
   return String(n).split("").map(Number);
 }
 
+/**
+ * Replace every occurrence of digit `d` in `n` except the one at place 10^k with
+ * another digit (never a leading 0), so "the value of the digit d" is unambiguous.
+ */
+function onlyOnce(n: number, k: number, d: number): number {
+  const s = String(n).split("");
+  const kIdx = s.length - 1 - k;
+  return Number(
+    s
+      .map((c, i) => {
+        if (i === kIdx || Number(c) !== d) return c;
+        let r = (d + 1 + (i % 8)) % 10;
+        if (i === 0 && r === 0) r = 1;
+        return String(r);
+      })
+      .join("")
+  );
+}
+
 function partialProducts(a: number, b: number): { parts: string[]; values: number[] } {
   const ds = digitsOf(a);
   const parts: string[] = [];
@@ -92,6 +111,10 @@ function multExplain(a: number, b: number): string {
   if (a === b) return `Square number: ${a} × ${a} = ${prod}. (Doubling helps: ${a} × ${a - 1} = ${a * (a - 1)}, plus one more ${a} is ${prod}.)`;
   const big = Math.max(a, b);
   const small = Math.min(a, b);
+  if (big < 6) {
+    // Only 3 × 4 / 4 × 3 reach here (0, 1, 2, 5 are handled above): small × (big − 5) would be negative.
+    return `${a} × ${b} means ${a} groups of ${b}. Times 4 is double, then double again: ${small} + ${small} = ${small * 2}, and ${small * 2} + ${small * 2} = ${prod}. Turn-around: ${b} × ${a} = ${prod} too.`;
+  }
   return `${a} × ${b} means ${a} groups of ${b}. Build from a fact you know: ${small} × 5 = ${small * 5}, then ${small} × ${big - 5} = ${small * (big - 5)}; ${small * 5} + ${small * (big - 5)} = ${prod}. Turn-around: ${b} × ${a} = ${prod} too.`;
 }
 
@@ -705,6 +728,21 @@ const PLACE_LIST: [number, string][] = [
   [100000, "hundred thousands"],
 ];
 
+/**
+ * Expanded-form distractor with a real place-value slip: the last term of 10 or
+ * more loses one zero (12,708 → "10,000 + 2,000 + 70 + 8"). Its sum is never the
+ * number, unlike a reordered expansion ("8 + 700 + 2,000 + 10,000"), which is
+ * still a correct expanded form.
+ */
+function droppedZero(ds: number[]): string {
+  const terms = ds.map((d, i) => d * 10 ** (ds.length - 1 - i)).filter((x) => x > 0);
+  let j = -1;
+  terms.forEach((t, i) => {
+    if (t >= 10) j = i;
+  });
+  return terms.map((t, i) => fmt(i === j ? t / 10 : t)).join(" + ");
+}
+
 const placeValueMillions: Generator = (ctx) => {
   const { rng } = ctx;
   const decimals = ctx.params?.decimals === true;
@@ -732,15 +770,21 @@ const placeValueMillions: Generator = (ctx) => {
         hint: "One place to the right = one tenth as much.",
       });
     }
-    const n = int(rng, 1000, 9999) / 1000;
-    const digit = pick(rng, [[0.1, "tenths"], [0.01, "hundredths"], [0.001, "thousandths"]] as const);
-    const dv = Math.floor(n / digit[0] + 1e-9) % 10;
+    // Work in whole thousandths (no float noise) and only ask about a non-zero digit:
+    // a 0 is worth 0 in every place, so "0 tenths" / "0 hundredths" would all be right.
+    let thousandths = int(rng, 1000, 9999);
+    if (thousandths % 1000 === 0) thousandths += 111;
+    const places = ([[1, "tenths"], [2, "hundredths"], [3, "thousandths"]] as const).filter(([p]) => Math.floor(thousandths / 10 ** (3 - p)) % 10 !== 0);
+    const digit = pick(rng, places);
+    const dv = Math.floor(thousandths / 10 ** (3 - digit[0])) % 10;
+    const shown = `${Math.floor(thousandths / 1000)}.${String(thousandths % 1000).padStart(3, "0")}`;
+    const worth = `0.${"0".repeat(digit[0] - 1)}${dv}${"0".repeat(3 - digit[0])}`;
     const answer = `${dv} ${digit[1]}`;
     const wrong = [`${dv} ${digit[1] === "tenths" ? "hundredths" : "tenths"}`, `${dv} ones`, `${dv} ${digit[1] === "thousandths" ? "hundredths" : "thousandths"}`].filter((w) => w !== answer);
     return labelChoice(rng, answer, wrong, {
-      prompt: `What is the value of the digit ${dv} in ${n.toFixed(3)} (in the ${digit[1]} place)?`,
-      display: { speak: `What is the value of the digit ${dv} in ${n.toFixed(3)}?` },
-      explain: `Places after the decimal point: tenths, hundredths, thousandths. The ${dv} sits in the ${digit[1]} place, so it is worth ${dv} ${digit[1]} (${(dv * digit[0]).toFixed(3)}).`,
+      prompt: `What is the value of the digit ${dv} in ${shown} (in the ${digit[1]} place)?`,
+      display: { speak: `What is the value of the digit ${dv} in ${shown}?` },
+      explain: `Places after the decimal point: tenths, hundredths, thousandths. The ${dv} sits in the ${digit[1]} place, so it is worth ${dv} ${digit[1]} (${worth}).`,
       hint: "Name the places after the point in order: tenths, hundredths, thousandths.",
     });
   }
@@ -765,7 +809,9 @@ const placeValueMillions: Generator = (ctx) => {
   if (m === "digitValue") {
     const k = int(rng, 1, 5);
     const d = Math.floor(n / 10 ** k) % 10 || 5;
-    const number = n - (Math.floor(n / 10 ** k) % 10) * 10 ** k + d * 10 ** k;
+    const placed = n - (Math.floor(n / 10 ** k) % 10) * 10 ** k + d * 10 ** k;
+    // The asked digit must appear exactly once, or "the value of the digit d" has two answers.
+    const number = onlyOnce(placed, k, d);
     return numericChoice(rng, d * 10 ** k, [d, d * 10 ** (k - 1), d * 10 ** (k + 1), k], {
       prompt: `What is the value of the digit ${d} in ${fmt(number)}?`,
       display: { speak: `What is the value of the digit ${d} in ${fmt(number)}?` },
@@ -789,7 +835,7 @@ const placeValueMillions: Generator = (ctx) => {
     const wrong = [
       ds.map((d, i) => d * 10 ** (ds.length - 2 - i)).filter((x) => x > 0).map((x) => fmt(Math.max(1, x))).join(" + "),
       ds.filter((d) => d > 0).join(" + "),
-      ds.map((d, i) => d * 10 ** (ds.length - 1 - i)).filter((x) => x > 0).map(fmt).reverse().join(" + "),
+      droppedZero(ds),
     ].filter((w) => w !== expanded);
     return labelChoice(rng, expanded, wrong, {
       prompt: `Which is the expanded form of ${fmt(n)}?`,
@@ -909,14 +955,18 @@ const multiplicativeComparison: Generator = (ctx) => {
       hint: `How many groups of ${small} fit into ${big}?`,
     };
   }
-  const third = pickName(rng, other);
+  // A third person, different from BOTH others (pickName only excludes one): never "Jack has 7 more than Jack".
+  let third = pickName(rng, other);
+  for (let guard = 0; third === name && guard < 20; guard++) third = pickName(rng, other);
   const addMore = int(rng, 2, 9);
   const additive = small + addMore;
-  const answer = big > additive ? other : third;
-  return labelChoice(rng, answer, [answer === other ? third : other, "they have the same", `${name}`], {
+  const same = "they have the same";
+  const answer = big > additive ? other : big < additive ? third : same;
+  const compared = big > additive ? `${big} > ${additive}, so ${other} has more.` : big < additive ? `${additive} > ${big}, so ${third} has more.` : `${big} = ${additive}, so they have the same.`;
+  return labelChoice(rng, answer, [other, third, same, name].filter((o) => o !== answer), {
     prompt: `${name} has ${small} ${items}. ${other} has ${k} times as many as ${name}. ${third} has ${addMore} more than ${name}. Who has more, ${other} or ${third}?`,
     display: { speak: `${name} has ${small} ${items}. ${other} has ${k} times as many. ${third} has ${addMore} more than ${name}. Who has more, ${other} or ${third}?` },
-    explain: `"${k} times as many" multiplies: ${k} × ${small} = ${big}. "${addMore} more" adds: ${small} + ${addMore} = ${additive}. ${big > additive ? `${big} > ${additive}` : `${additive} > ${big}`}, so ${answer} has more.`,
+    explain: `"${k} times as many" multiplies: ${k} × ${small} = ${big}. "${addMore} more" adds: ${small} + ${addMore} = ${additive}. ${compared}`,
     hint: "'Times as many' means multiply; 'more than' means add. Work out both amounts.",
   });
 };
@@ -962,9 +1012,9 @@ const multiStepWordProblem: Generator = (ctx) => {
       const inch = int(rng, 1, 11);
       return {
         type: "numeric",
-        prompt: `A baseball bat is ${ft} feet ${inch} inches long. How many inches is that?`,
+        prompt: `A baseball bat is ${ft} feet ${inch} ${inch === 1 ? "inch" : "inches"} long. How many inches is that?`,
         answer: ft * 12 + inch,
-        display: { speak: `A baseball bat is ${ft} feet ${inch} inches long. How many inches is that?` },
+        display: { speak: `A baseball bat is ${ft} feet ${inch} ${inch === 1 ? "inch" : "inches"} long. How many inches is that?` },
         explain: `1 foot = 12 inches. ${ft} × 12 = ${ft * 12} inches, plus ${inch} more = ${ft * 12 + inch} inches.`,
         hint: "Change the feet to inches first (12 inches per foot), then add the extra inches.",
       };

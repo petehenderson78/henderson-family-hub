@@ -685,7 +685,7 @@ export const LILY_MATH_SKILLS: Skill[] = [
     estMinutes: 11,
     testOut: false,
     parentTip: "Show regrouping with blocks: trade one rod for ten cubes when the ones run short; then record the same move in columns.",
-    intro: ["Subtract the ones first. If the top digit is smaller, borrow one from the next column: a ten becomes ten ones.", "Example: 503 − 247 — ones: 3 is less than 7, so regroup: 13 − 7 = 6; tens: 9 − 4 = 5; hundreds: 4 − 2 = 2. Answer 256."],
+    intro: ["Subtract the ones first. If the top digit is smaller, borrow one from the next column: a ten becomes ten ones.", "If the next column is 0, borrow from the column after it: 1 hundred becomes 10 tens, then 1 of those tens becomes 10 ones (9 tens are left).", "Example: 503 − 247 — ones: 3 is less than 7 and the tens digit is 0, so regroup from the hundreds: 13 − 7 = 6; tens: 9 − 4 = 5; hundreds: 4 − 2 = 2. Answer 256."],
   }),
   g2({
     id: "m2.nbt.mental",
@@ -697,8 +697,8 @@ export const LILY_MATH_SKILLS: Skill[] = [
     params: { max: 900, steps: [10, 100] },
     estMinutes: 6,
     testOut: true,
-    parentTip: "Say a number and a jump ('356, plus 100'); only one digit should change. Do it as a quick warm-up.",
-    intro: ["Adding 10 changes the tens digit; adding 100 changes the hundreds digit. Nothing else moves.", "Example: 100 more than 356 is 456. 10 less than 356 is 346."],
+    parentTip: "Say a number and a jump ('356, plus 100'); usually only one digit changes. Then try a crossing like '395, plus 10' (405) and talk about why the hundreds moved too.",
+    intro: ["Adding 10 changes the tens digit; adding 100 changes the hundreds digit. The ones stay the same.", "Watch for a crossing: if the tens digit is 9 (adding 10) or 0 (taking 10 away), the hundreds digit changes too — 10 more than 395 is 405.", "Example: 100 more than 356 is 456. 10 less than 356 is 346."],
   }),
   // ---- Grade 2: foundations for multiplication (2.OA.C) ---------------------
   g2({
