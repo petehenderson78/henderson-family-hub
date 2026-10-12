@@ -17,6 +17,14 @@ import ReportView from "./report-view";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Attempt rows read for the pack. The "How" column replays the rows that led to
+ * each mastery, so they must all be here: a year of evenings is about 24,000
+ * rows, past loadAttemptsServer's default cap of 20,000 (a capped read would
+ * drop the oldest learn rows and label a practiced skill "Parent-verified").
+ */
+const REPORT_ATTEMPT_CAP = 100_000;
+
 /** The evidence pack: printable mastery record by standard, parent log, sessions, placement summary, CSV. Parents only. */
 export default async function ReportPage({ params }: { params: Promise<{ slug: string }> }) {
   const supabase = await createClient();
@@ -47,7 +55,7 @@ export default async function ReportPage({ params }: { params: Promise<{ slug: s
       loadProgressServer(learner.id),
       loadRecentSessionsServer(learner.id, 365, today),
       loadNotesServer(learner.id, "2020-01-01", today),
-      loadAttemptsServer(learner.id),
+      loadAttemptsServer(learner.id, REPORT_ATTEMPT_CAP),
     ]);
     return { learner, progressRows, sessions, notes, attempts };
   };

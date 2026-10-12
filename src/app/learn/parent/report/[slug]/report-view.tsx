@@ -31,7 +31,8 @@ function downloadCsv(filename: string, csv: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // iPad / iPhone Safari reads the blob only after the download prompt is answered: keep the URL alive for a minute.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 /** A timestamp as a family-timezone date (an evening session is not dated the next UTC day). */
@@ -50,7 +51,7 @@ export default function ReportView({ learner, rows, summary, paragraph, notes: a
     <div className="print-root min-h-[100dvh] bg-[#F8FAFC] pb-28 print:bg-white print:pb-0">
       <div className="mx-auto max-w-3xl px-4 pt-8 print:max-w-none print:px-0 print:pt-0">
         <div className="no-print flex items-center justify-between">
-          <Link href="/learn/parent" className="text-xs font-semibold text-slate-400">
+          <Link href="/learn/parent" className="-ml-2 inline-flex min-h-[44px] items-center px-2 text-xs font-semibold text-slate-400">
             ← Parent view
           </Link>
           <div className="flex gap-2">
@@ -223,7 +224,8 @@ export default function ReportView({ learner, rows, summary, paragraph, notes: a
 
         <p className="mt-8 text-center text-[11px] text-slate-400 print:mt-4">
           Mastery rule: ≥ 10 attempts, ≥ 90% over the last 10, streak ≥ 3 — independent answers only. Test-out: a 10-item skip check at ≥ 9/10, or a placement
-          probe (5/5, or 9/10 over two). Reviews spaced at 1 / 3 / 7 / 14 / 30 / 60 days.
+          probe (5/5, or 9/10 over two). Parent-verified: marked mastered by a parent from book work, without an app test-out or enough app practice. Reviews
+          spaced at 1 / 3 / 7 / 14 / 30 / 60 days.
         </p>
       </div>
     </div>

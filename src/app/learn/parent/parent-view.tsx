@@ -5,10 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Learner, LearnerSettings, LightWeek, SessionBlock, SessionRecord, Skill, SkillProgress } from "@/lib/learn/types";
 import { catalogFor, SUBJECT_LABEL } from "@/lib/learn/catalog";
-import { LADDERS, applyPauseEdit, ladderFor, levelFor, markMasteredByParent, mergeProgress, needsSkipCheckFollowUp, shiftReviewDates } from "@/lib/learn/mastery";
+import { LADDERS, applyPauseEdit, emptyProgress, ladderFor, levelFor, markMasteredByParent, mergeProgress, needsSkipCheckFollowUp } from "@/lib/learn/mastery";
 import {
   POINTS,
-  computeStreak,
+  RING_CLOSE_AT,
+  computeStreakInfo,
   daysPracticedThisWeek,
   formatClockLabel,
   formatDateStr,
@@ -25,10 +26,12 @@ import {
   vacationReturnLabel,
   weeklyRing,
   xpThisWeek,
+  type SundayReview,
+  type ThermostatBand,
 } from "@/lib/learn/stats";
-import { addDaysToDateStr, weekDates, weekdayShort } from "@/lib/learn/dates";
-import { saveProgress, updateLearnerSettings } from "@/lib/learn/store";
-import { addNote, logFinishedBook, upsertRewardItem, NOTE_KIND_LABEL, type LearnNote, type RewardItem } from "@/lib/learn/store-notes";
+import { addDaysToDateStr, familyDateOfIso, formatClockMinutes, minutesSinceMidnightInFamilyTz, weekDates, weekdayShort } from "@/lib/learn/dates";
+import { isLearnWriteError, loadLearners, loadProgress, saveProgress, updateLearnerSettings } from "@/lib/learn/store";
+import { addNote, logFinishedBook, updateRewardItem, upsertRewardItem, NOTE_KIND_LABEL, type LearnNote, type Redemption, type RewardItem } from "@/lib/learn/store-notes";
 import { fetchCoachLog } from "@/lib/learn/coach-client";
 import type { CoachLogMessage } from "@/lib/learn/coach-types";
 import { KID_EMOJI } from "../learn-home";
@@ -49,19 +52,26 @@ export interface ParentKid {
   rewardItems: RewardItem[];
   /** last 8 days of learn_notes */
   notes: LearnNote[];
+  /** the latest redemptions, newest first (the Friday Close log) */
+  redemptions: Redemption[];
+  /** the Sunday review panel (stats.ts sundayReview) for the last 7 family days */
+  sunday: SundayReview;
 }
 
 interface ParentViewProps {
   kids: ParentKid[];
   today: string;
+  /** the lower date bound of the sessions load (every session from it on is in `sessions`): the streak walk's floor */
+  sessionsFrom: string;
   nowIso: string;
   /** from the server page: Boolean(ANTHROPIC_API_KEY) */
   coachEnabled: boolean;
 }
 
-const DOCS_URL = "https://github.com/petehenderson78/henderson-family-hub/blob/main/docs/learning/README.md";
+/** The private Learning Lab page (the repo is public, so the guides are not in it). */
+const GUIDES_URL = "https://claude.ai/artifact/5j4b47BLawrNQR5AgN7W84";
 
-export default function ParentView({ kids, today, nowIso, coachEnabled }: ParentViewProps) {
+export default function ParentView({ kids, today, sessionsFrom, nowIso, coachEnabled }: ParentViewProps) {
   const router = useRouter();
   const now = new Date(nowIso);
   const week = weekDates(today);
@@ -84,9 +94,10 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
       mastered: masteredCount(catalog, progressMap),
       minutesWeek: minutesThisWeek(k.sessions, today),
       xpWeek: xpThisWeek(k.sessions, today),
-      streak: computeStreak(k.sessions, today, k.learner.settings),
+      streak: computeStreakInfo(k.sessions, today, k.learner.settings, sessionsFrom),
       ring: weeklyRing(k.sessions, today),
-      due: reviewDueCount(catalog, progressMap, now),
+      // Paused days push reviews back (the planner's rule), so a vacation never shows a pile of due reviews.
+      due: reviewDueCount(catalog, progressMap, now, k.learner.settings, today),
       days: daysPracticedThisWeek(k.sessions, today),
       masteredWeek: masteredThisWeek(catalog, progressMap, today),
       flags: struggleFlags(catalog, progressMap),
@@ -101,10 +112,10 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
   return (
     <div className="min-h-[100dvh] bg-[#F8FAFC] pb-[calc(8rem+env(safe-area-inset-bottom))]">
       <div className="mx-auto max-w-lg px-4 pt-8">
-        <Link href="/learn" className="text-xs font-semibold text-slate-400">
+        <Link href="/learn" className="-ml-2 inline-flex min-h-[44px] items-center px-2 text-xs font-semibold text-slate-400">
           ← Learn
         </Link>
-        <h1 className="mt-3 text-[28px] font-bold tracking-tight text-slate-900">Parent view</h1>
+        <h1 className="mt-1 text-[28px] font-bold tracking-tight text-slate-900">Parent view</h1>
         <p className="mt-1.5 text-sm font-medium text-slate-400">Both kids at a glance, flags, settings, rewards and the evidence report.</p>
 
         {derived.length === 0 && (
@@ -147,7 +158,10 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
                     {" · "}★ {d.ring.stars}/{d.ring.target} stars{d.ring.fridayFree && !d.ring.closed ? " · Friday Free" : ""}
                   </p>
                 </div>
-                <StreakFlame streak={d.streak} size="sm" />
+                <div className="flex flex-shrink-0 items-center" title={d.streak.complete ? undefined : `At least ${d.streak.streak} days (older nights were not loaded)`}>
+                  <StreakFlame streak={d.streak.streak} size="sm" />
+                  {!d.streak.complete && <span className="ml-0.5 text-sm font-bold text-orange-600">+</span>}
+                </div>
               </div>
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">
                 <div className="rounded-xl bg-slate-50 p-2.5">
@@ -213,7 +227,7 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
                           <p className="mt-1.5 text-xs text-slate-700">
                             <span className="font-bold">What to say:</span> “{f.skill.parentTip}”
                           </p>
-                          <Link href={`/learn/${d.learner.slug}/play?skill=${encodeURIComponent(f.skill.id)}&mode=learn`} className="mt-2 inline-flex min-h-[36px] items-center rounded-lg bg-white px-3 text-xs font-bold text-indigo-700 border border-indigo-100">
+                          <Link href={`/learn/${d.learner.slug}/play?skill=${encodeURIComponent(f.skill.id)}&mode=learn`} className="mt-2 inline-flex min-h-[44px] items-center rounded-lg border border-indigo-100 bg-white px-3 text-xs font-bold text-indigo-700">
                             Practice it together →
                           </Link>
                         </li>
@@ -282,6 +296,22 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
           </section>
         )}
 
+        {/* Sunday review (design §3 stop / adjust table) */}
+        {derived.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">Sunday review</h2>
+            <p className="mt-1 text-xs text-slate-400">
+              The stop / adjust signals for the last 7 days: five minutes on Sunday, then act on the list. Independent accuracy under 70% → a different worked
+              example and one step back; 70-95% → hold; over 95% two weeks running → pretest the next two skills.
+            </p>
+            <div className="mt-3 space-y-3">
+              {derived.map((d) => (
+                <SundayReviewCard key={d.learner.id} learner={d.learner} review={d.sunday} />
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Parent log */}
         {derived.length > 0 && (
           <section className="mt-8">
@@ -331,7 +361,7 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
         {derived.length > 0 && (
           <section className="mt-8">
             <h2 className="text-lg font-bold tracking-tight text-slate-900">Mark as mastered</h2>
-            <p className="mt-1 text-xs text-slate-400">Seed what the books already proved (DONE stays DONE). Marked skills get a review in 7 days.</p>
+            <p className="mt-1 text-xs text-slate-400">Seed what the books already proved (DONE stays DONE). First reviews are spread 7-13 days out, so skills marked together don&apos;t all come due on one night.</p>
             <div className="mt-3 space-y-3">
               {derived.map((d) => (
                 <MarkMastered key={d.learner.id} learner={d.learner} catalog={d.catalog} progressMap={d.progressMap} today={today} onNote={pushNote} onMarked={() => router.refresh()} />
@@ -346,7 +376,7 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
             <h2 className="text-lg font-bold tracking-tight text-slate-900">Settings</h2>
             <div className="mt-3 space-y-3">
               {derived.map((d) => (
-                <SettingsEditor key={d.learner.id} learner={d.learner} progressRows={d.progressRows} today={today} />
+                <SettingsEditor key={d.learner.id} learner={d.learner} today={today} onSaved={() => router.refresh()} />
               ))}
             </div>
           </section>
@@ -358,11 +388,12 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
             <h2 className="text-lg font-bold tracking-tight text-slate-900">Reward store</h2>
             <p className="mt-1 text-xs text-slate-400">
               Points come from inputs only (blocks, starting on time, review sets, finished books, workshops, a surprise bonus) — at most {POINTS.weeklyCap} a week.
-              Redeeming needs a parent&apos;s hold-to-confirm on the kid&apos;s screen. Prices reset quarterly; retire anything that has become the point.
+              Only a parent can cash points in: use the child&apos;s Rewards button on Tonight, or open the store on their Mission Control while signed in as a
+              parent. Prices reset quarterly; retire anything that has become the point.
             </p>
             <div className="mt-3 space-y-3">
               {derived.map((d) => (
-                <RewardItemsManager key={d.learner.id} learner={d.learner} items={d.rewardItems} balance={d.balance} />
+                <RewardItemsManager key={d.learner.id} learner={d.learner} items={d.rewardItems} balance={d.balance} redemptions={d.redemptions} />
               ))}
             </div>
           </section>
@@ -388,15 +419,17 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
         {/* Docs */}
         <section className="mt-8">
           <a
-            href={DOCS_URL}
+            href={GUIDES_URL}
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             className="flex min-h-[56px] items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm"
           >
-            <span>📚 Program guide, plans &amp; G&amp;T roadmap</span>
-            <span className="text-slate-300">↗</span>
+            <span>📚 Program guides (private page)</span>
+            <span className="text-slate-300" aria-hidden>
+              ↗
+            </span>
           </a>
-          <p className="mt-2 text-center text-[11px] text-slate-400">docs/learning on GitHub</p>
+          <p className="mt-2 text-center text-[11px] text-slate-400">Program guide, plans and G&amp;T roadmap · opens in a new tab</p>
         </section>
       </div>
     </div>
@@ -409,56 +442,90 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
 
 const FIELD = "w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-base font-bold text-slate-900 outline-none focus:border-indigo-400";
 const LABEL = "mb-1 block text-center text-[10px] font-semibold uppercase tracking-wider text-slate-400";
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const PAUSE_HORIZON_DAYS = 400;
-
-/**
- * Days from today that `next` pauses and `prev` did not: a new or extended
- * "Pause until", or a new vacation range. Pending reviews are moved by this
- * many days when the settings are saved, so they do not pile up on the return day.
- */
-function newlyPausedDays(prev: LearnerSettings, next: LearnerSettings, today: string): number {
-  let days = 0;
-  for (let i = 0, d = today; i < PAUSE_HORIZON_DAYS; i++, d = addDaysToDateStr(d, 1)) {
-    if (isPaused(next, d) && !isPaused(prev, d)) days += 1;
-  }
-  return days;
+/** Equality for settings values (plain data: numbers, strings, booleans, arrays, small objects). */
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function SettingsEditor({ learner, progressRows, today }: { learner: Learner; progressRows: SkillProgress[]; today: string }) {
+/** Key by key: the edited value where the form changed it (edit vs base), else the stored one. */
+function mergeShallow<T extends object>(base: T, edit: T, stored: T): T {
+  const out = { ...stored };
+  for (const key of Object.keys(edit) as (keyof T)[]) {
+    if (!sameValue(base[key], edit[key])) out[key] = edit[key];
+  }
+  return out;
+}
+
+/**
+ * What a settings save writes: the row as stored NOW, with only the fields the
+ * parent changed in this form laid on top (field by field inside blocks,
+ * weekend minutes, target grades and theme). A change saved elsewhere since
+ * the page loaded (the other parent's pause, a currency edit on another
+ * device) is kept. pausedFrom and vacations are not form fields: they come
+ * from the stored row, and applyPauseEdit derives them from a "Pause until" edit.
+ */
+function mergeSettingsEdit(base: LearnerSettings, edit: LearnerSettings, stored: LearnerSettings): LearnerSettings {
+  return {
+    ...mergeShallow(base, edit, stored),
+    blocks: mergeShallow(base.blocks, edit.blocks, stored.blocks),
+    weekend: mergeShallow(base.weekend, edit.weekend, stored.weekend),
+    targetGrade: mergeShallow(base.targetGrade, edit.targetGrade, stored.targetGrade),
+    theme: mergeShallow(base.theme, edit.theme, stored.theme),
+    pausedFrom: stored.pausedFrom,
+    vacations: stored.vacations,
+  };
+}
+
+/** Did the save change what is paused (pause, vacations, light weeks)? */
+function pauseFieldsChanged(a: LearnerSettings, b: LearnerSettings): boolean {
+  return !sameValue([a.pausedUntil ?? null, a.vacations ?? [], a.lightWeeks ?? []], [b.pausedUntil ?? null, b.vacations ?? [], b.lightWeeks ?? []]);
+}
+
+/** The learner's settings as stored right now (re-read just before a save). */
+async function loadStoredSettings(learnerId: string): Promise<LearnerSettings> {
+  const learner = (await loadLearners()).find((l) => l.id === learnerId);
+  if (!learner) throw new Error("loadStoredSettings: learner not found");
+  return learner.settings;
+}
+
+function SettingsEditor({ learner, today, onSaved }: { learner: Learner; today: string; onSaved: () => void }) {
   const [form, setForm] = useState<LearnerSettings>(learner.settings);
-  /** last persisted settings — the pause comparison baseline, so a re-save never shifts reviews twice */
-  const [saved, setSaved] = useState<LearnerSettings>(learner.settings);
-  const [rows, setRows] = useState<SkillProgress[]>(progressRows);
-  const [shiftNote, setShiftNote] = useState<string | null>(null);
+  /** the settings this form started from (page load, then each save): only fields that differ from it are written */
+  const [base, setBase] = useState<LearnerSettings>(learner.settings);
+  const [pauseNote, setPauseNote] = useState(false);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [errorText, setErrorText] = useState<string | null>(null);
 
   const patch = (fn: (f: LearnerSettings) => LearnerSettings) => {
     setState("idle");
-    setShiftNote(null);
+    setPauseNote(false);
+    setErrorText(null);
     setForm(fn);
   };
   const int = (raw: string, min: number, max: number) => Math.max(min, Math.min(max, Number.parseInt(raw || "0", 10) || 0));
 
   async function save() {
     setState("saving");
+    setErrorText(null);
     try {
-      // A new / changed "Pause until" starts today; the elapsed part of the old pause is kept as a vacation
-      // range, so clearing a pause never unfreezes the streak for days that were paused.
-      const lightWeeks = (form.lightWeeks ?? []).filter((w) => /^\d{4}-\d{2}-\d{2}$/.test(w.from) && /^\d{4}-\d{2}-\d{2}$/.test(w.to) && w.from <= w.to);
-      const toSave = applyPauseEdit(saved, { ...form, lightWeeks }, today);
+      const lightWeeks = (form.lightWeeks ?? []).filter((w) => DATE_RE.test(w.from) && DATE_RE.test(w.to) && w.from <= w.to);
+      // Re-read the stored row: a change saved elsewhere since this page loaded is kept, only this form's edits are written.
+      const stored = await loadStoredSettings(learner.id);
+      const merged = mergeSettingsEdit(base, { ...form, lightWeeks }, stored);
+      // A new / changed "Pause until" starts today; the elapsed part of the stored pause is kept as a vacation range,
+      // so clearing a pause never unfreezes the streak for days that were paused.
+      const toSave = applyPauseEdit(stored, merged, today);
       await updateLearnerSettings(learner.id, toSave);
+      // No review dates are written: paused days are stepped over when a review comes due (isReviewDueOn).
+      setPauseNote(pauseFieldsChanged(stored, toSave));
       setForm(toSave);
-      // Vacation: move every pending review past the newly paused days (once per pause change).
-      const days = newlyPausedDays(saved, toSave, today);
-      const shifted = days > 0 ? shiftReviewDates(rows, days) : rows;
-      const changed = shifted.filter((p, i) => p !== rows[i]);
-      if (changed.length > 0) await saveProgress(learner.id, changed);
-      setRows(shifted);
-      setShiftNote(changed.length > 0 ? `Review dates moved ${days} day${days === 1 ? "" : "s"}` : null);
-      setSaved(toSave);
+      setBase(toSave);
       setState("saved");
-    } catch {
+      onSaved();
+    } catch (e) {
+      setErrorText(isLearnWriteError(e) ? e.message : null);
       setState("error");
     }
   }
@@ -466,6 +533,7 @@ function SettingsEditor({ learner, progressRows, today }: { learner: Learner; pr
   const blockTotal = form.blocks.math + form.blocks.reading + form.blocks.brain;
   const weekendTotal = form.weekend.math + form.weekend.reading + form.weekend.brain;
   const paused = isPaused(form, today);
+  const pauseSet = !!form.pausedUntil && form.pausedUntil >= today;
 
   return (
     <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
@@ -516,22 +584,18 @@ function SettingsEditor({ learner, progressRows, today }: { learner: Learner; pr
           <input type="time" value={form.stopBy} onChange={(e) => patch((f) => ({ ...f, stopBy: /^([01]\d|2[0-3]):[0-5]\d$/.test(e.target.value) ? e.target.value : f.stopBy }))} className={FIELD} />
           <span className="mt-1 block text-center text-[10px] text-slate-400">{formatClockLabel(form.stopBy)} · bedtime wind-down after</span>
         </label>
-        <label className="block">
-          <span className={LABEL}>Pause until</span>
-          <input type="date" value={form.pausedUntil ?? ""} min={today} onChange={(e) => patch((f) => ({ ...f, pausedUntil: /^\d{4}-\d{2}-\d{2}$/.test(e.target.value) ? e.target.value : null }))} className={FIELD} />
-          <span className="mt-1 block text-center text-[10px] text-slate-400">
-            {paused ? (
-              <>
-                🏖️ vacation mode ·{" "}
-                <button type="button" onClick={() => patch((f) => ({ ...f, pausedUntil: null }))} className="font-bold text-indigo-600">
-                  clear
-                </button>
-              </>
-            ) : (
-              "streak freezes, no catch-up"
-            )}
-          </span>
-        </label>
+        <div>
+          <label className="block">
+            <span className={LABEL}>Pause until</span>
+            <input type="date" value={form.pausedUntil ?? ""} min={today} onChange={(e) => patch((f) => ({ ...f, pausedUntil: DATE_RE.test(e.target.value) ? e.target.value : null }))} className={FIELD} />
+          </label>
+          <span className="mt-1 block text-center text-[10px] text-slate-400">{paused ? "🏖️ vacation mode" : "streak freezes, no catch-up"}</span>
+          {pauseSet && (
+            <button type="button" onClick={() => patch((f) => ({ ...f, pausedUntil: null }))} className="mt-1 flex min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-50 text-xs font-bold text-indigo-600">
+              Clear pause
+            </button>
+          )}
+        </div>
       </div>
 
       <LightWeeksEditor weeks={form.lightWeeks ?? []} today={today} onChange={(lightWeeks) => patch((f) => ({ ...f, lightWeeks }))} />
@@ -601,9 +665,14 @@ function SettingsEditor({ learner, progressRows, today }: { learner: Learner; pr
       >
         {state === "saving" ? "Saving…" : state === "saved" ? "Saved ✓" : state === "error" ? "Couldn't save — tap to retry" : "Save settings"}
       </button>
-      {shiftNote && (
+      {state === "error" && errorText && (
+        <p className="mt-2 text-center text-[11px] font-semibold text-rose-600" role="alert">
+          {errorText}
+        </p>
+      )}
+      {state === "saved" && pauseNote && (
         <p className="mt-2 text-center text-[11px] font-semibold text-emerald-600" role="status">
-          📅 {shiftNote} — reviews pick up after the break.
+          📅 Paused days push reviews back automatically: they don&apos;t count toward review spacing, so no review dates were moved.
         </p>
       )}
     </div>
@@ -616,29 +685,58 @@ function LightWeeksEditor({ weeks, today, onChange }: { weeks: LightWeek[]; toda
   return (
     <div className="mt-3">
       <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Light weeks</p>
-      <p className="mt-0.5 text-[11px] text-slate-400">Review-only = review sets only. Off = like vacation: no mission, streak frozen, no catch-up.</p>
+      <p className="mt-0.5 text-[11px] text-slate-400">
+        Review-only = review sets only. Off = like vacation: no mission, streak frozen, no catch-up, and paused days push reviews back.
+      </p>
       <ul className="mt-2 space-y-2">
         {weeks.map((w, i) => (
-          <li key={i} className="grid grid-cols-[1fr_1fr_auto_auto] items-center gap-1.5">
-            <input type="date" value={w.from} onChange={(e) => set(i, { from: e.target.value })} className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold text-slate-900" aria-label="from" />
-            <input type="date" value={w.to} min={w.from} onChange={(e) => set(i, { to: e.target.value })} className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-xs font-semibold text-slate-900" aria-label="to" />
-            <select value={w.mode} onChange={(e) => set(i, { mode: e.target.value === "off" ? "off" : "review-only" })} className="rounded-lg border border-slate-200 bg-slate-50 px-1.5 py-2 text-xs font-semibold text-slate-900" aria-label="mode">
-              <option value="review-only">Review-only</option>
-              <option value="off">Off</option>
-            </select>
-            <button type="button" onClick={() => onChange(weeks.filter((_, j) => j !== i))} className="h-9 w-9 rounded-lg bg-slate-100 text-sm font-bold text-slate-500" aria-label="remove light week">
-              ✕
-            </button>
-            <span className="col-span-4 -mt-1 text-[10px] text-slate-400">
+          <li key={i} className="rounded-xl border border-slate-100 bg-slate-50/60 p-2">
+            <div className="grid grid-cols-2 gap-1.5">
+              <input
+                type="date"
+                value={w.from}
+                onChange={(e) => set(i, { from: e.target.value })}
+                className="min-h-[44px] w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 text-base font-semibold text-slate-900"
+                aria-label="Light week start"
+              />
+              <input
+                type="date"
+                value={w.to}
+                min={w.from}
+                onChange={(e) => set(i, { to: e.target.value })}
+                className="min-h-[44px] w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 text-base font-semibold text-slate-900"
+                aria-label="Light week end"
+              />
+            </div>
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <select
+                value={w.mode}
+                onChange={(e) => set(i, { mode: e.target.value === "off" ? "off" : "review-only" })}
+                className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-base font-semibold text-slate-900"
+                aria-label="Light week mode"
+              >
+                <option value="review-only">Review-only</option>
+                <option value="off">Off</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => onChange(weeks.filter((_, j) => j !== i))}
+                className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-sm font-bold text-slate-500"
+                aria-label="Remove light week"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-slate-400">
               {w.from && w.to && w.from <= w.to ? `${formatDateStr(w.from)} – ${formatDateStr(w.to)}${w.to < today ? " · past" : w.from <= today ? " · now" : ""}` : "pick a start and an end"}
-            </span>
+            </p>
           </li>
         ))}
       </ul>
       <button
         type="button"
         onClick={() => onChange([...weeks, { from: today, to: addDaysToDateStr(today, 6), mode: "review-only" }])}
-        className="mt-2 min-h-[40px] rounded-lg bg-slate-50 px-3 text-xs font-bold text-indigo-700"
+        className="mt-2 min-h-[44px] rounded-lg bg-slate-50 px-3 text-xs font-bold text-indigo-700"
       >
         + Add a light week
       </button>
@@ -675,7 +773,7 @@ function FinishedBook({ learner, today, onNote }: { learner: Learner; today: str
           }}
           maxLength={200}
           placeholder="Title (retold at dinner)"
-          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-400"
+          className="min-h-[44px] min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-400"
         />
         <button type="button" onClick={() => void save()} disabled={state === "saving"} className="min-h-[44px] rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white disabled:opacity-40">
           {state === "saving" ? "…" : "Log"}
@@ -690,7 +788,9 @@ function FinishedBook({ learner, today, onNote }: { learner: Learner; today: str
 // Mark as mastered
 // ---------------------------------------------------------------------------
 
-const MARK_INTERVAL_DAYS = 7;
+/** A parent-marked skill's first review: 7 days out, spread over 7-13 days across the skills marked together (FR-30). */
+const MARK_FIRST_REVIEW_DAYS = 7;
+const MARK_SPREAD_DAYS = 7;
 
 function MarkMastered({
   learner,
@@ -731,25 +831,35 @@ function MarkMastered({
     setState("saving");
     const now = new Date();
     try {
-      // Mastered with a review in 7 days; stuck / review-miss flags and any old test-out mark are cleared.
-      await saveProgress(
-        learner.id,
-        skills.map((s) => markMasteredByParent({ ...progressMap[s.id], skillId: s.id }, now, MARK_INTERVAL_DAYS))
-      );
+      // Re-read the rows: practice since this page loaded keeps its windows and counters, and a skill mastered meanwhile is left alone.
+      const fresh = new Map((await loadProgress(learner.id)).map((p) => [p.skillId, p]));
+      const toMark = skills.filter((s) => fresh.get(s.id)?.status !== "mastered");
+      // Mastered; stuck / review-miss flags and any old test-out mark are cleared. First reviews are spread over
+      // 7-13 days in catalog order (reviewAtIso inside markMasteredByParent), so they don't all come due together.
+      if (toMark.length > 0) {
+        await saveProgress(
+          learner.id,
+          toMark.map((s, i) => markMasteredByParent(fresh.get(s.id) ?? emptyProgress(s.id), now, MARK_FIRST_REVIEW_DAYS + (i % MARK_SPREAD_DAYS)))
+        );
+      }
       // The skills are mastered now: drop them from the list even if the log note below fails.
       setMarked((m) => new Set([...m, ...skills.map((s) => s.id)]));
       setSelected(new Set());
       onMarked();
+      if (toMark.length === 0) {
+        setState("idle");
+        return;
+      }
       const saved = await addNote({
         learnerId: learner.id,
         date: today,
         kind: "other",
-        subject: skills[0].subject,
-        text: `Marked mastered by parent: ${skills.map((s) => s.title).join("; ")}${note.trim() ? ` — ${note.trim()}` : ""}`,
+        subject: toMark[0].subject,
+        text: `Marked mastered by parent: ${toMark.map((s) => s.title).join("; ")}${note.trim() ? ` — ${note.trim()}` : ""}`,
         minutes: 0,
         score: null,
         total: null,
-        standards: Array.from(new Set(skills.flatMap((s) => s.standards))),
+        standards: Array.from(new Set(toMark.flatMap((s) => s.standards))),
       });
       onNote(saved);
       setNote("");
@@ -812,23 +922,45 @@ function MarkMastered({
 // Reward items
 // ---------------------------------------------------------------------------
 
-function RewardItemsManager({ learner, items: initial, balance }: { learner: Learner; items: RewardItem[]; balance: number }) {
+function sortItems(list: RewardItem[]): RewardItem[] {
+  return [...list].sort((a, b) => a.cost - b.cost || a.title.localeCompare(b.title));
+}
+
+/** The message to show for a failed store write ("That reward already exists" for a duplicate title). */
+function storeErrorText(e: unknown, fallback: string): string {
+  if (!isLearnWriteError(e)) return fallback;
+  return e.code === "duplicate" ? "That reward already exists" : e.message;
+}
+
+const MAX_REWARD_COST = 9999;
+
+function RewardItemsManager({ learner, items: initial, balance, redemptions }: { learner: Learner; items: RewardItem[]; balance: number; redemptions: Redemption[] }) {
   const [items, setItems] = useState<RewardItem[]>(initial);
   const [title, setTitle] = useState("");
   const [cost, setCost] = useState(10);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** the item whose price is open for editing, with the typed price */
+  const [editing, setEditing] = useState<{ id: string; draft: string } | null>(null);
+  const currency = learner.settings.theme.currency;
+  const titleOf = new Map(items.map((i) => [i.id, i.title]));
 
   async function add() {
-    if (!title.trim()) return;
+    const name = title.trim();
+    if (!name) return;
+    const existing = items.find((i) => i.title.trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      setError(existing.active ? "That reward already exists" : "That reward already exists (hidden): tap Show to put it back on sale.");
+      return;
+    }
     setBusy("new");
     setError(null);
     try {
-      const saved = await upsertRewardItem({ learnerId: learner.id, title: title.trim(), cost, active: true });
-      setItems((list) => [...list, saved].sort((a, b) => a.cost - b.cost));
+      const saved = await upsertRewardItem({ learnerId: learner.id, title: name, cost, active: true });
+      setItems((list) => sortItems([...list, saved]));
       setTitle("");
-    } catch {
-      setError("Couldn't add — parents only (check you're signed in as a parent).");
+    } catch (e) {
+      setError(storeErrorText(e, "Couldn't add the reward. Check the connection and try again."));
     } finally {
       setBusy(null);
     }
@@ -839,10 +971,24 @@ function RewardItemsManager({ learner, items: initial, balance }: { learner: Lea
     setBusy(item.id);
     setError(null);
     try {
-      const saved = await upsertRewardItem({ ...item, active: !item.active });
+      const saved = await updateRewardItem(item.id, { active: !item.active });
       setItems((list) => list.map((i) => (i.id === saved.id ? saved : i)));
-    } catch {
-      setError("Couldn't update — parents only.");
+    } catch (e) {
+      setError(storeErrorText(e, "Couldn't update the reward. Check the connection and try again."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function savePrice(id: string, price: number) {
+    setBusy(id);
+    setError(null);
+    try {
+      const saved = await updateRewardItem(id, { cost: price });
+      setItems((list) => sortItems(list.map((i) => (i.id === saved.id ? saved : i))));
+      setEditing(null);
+    } catch (e) {
+      setError(storeErrorText(e, "Couldn't change the price. Check the connection and try again."));
     } finally {
       setBusy(null);
     }
@@ -853,37 +999,249 @@ function RewardItemsManager({ learner, items: initial, balance }: { learner: Lea
       <p className="text-sm font-bold text-slate-900">
         <span aria-hidden>{KID_EMOJI[learner.slug] ?? "⭐"}</span> {learner.name}
         <span className="ml-2 text-xs font-medium text-slate-400">
-          {balance} {learner.settings.theme.currency} to spend
+          {balance} {currency} to spend
         </span>
       </p>
       {items.length === 0 ? (
         <p className="mt-2 text-xs text-slate-400">No rewards yet — run 009_learn_design.sql for the starter store, or add one below.</p>
       ) : (
         <ul className="mt-2 space-y-1.5">
-          {items.map((item) => (
-            <li key={item.id ?? item.title} className={`flex items-center gap-3 rounded-xl px-3 py-2 ${item.active ? "bg-slate-50" : "bg-slate-50/50 opacity-60"}`}>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold text-slate-900">{item.title}</span>
-                <span className="block text-[11px] text-slate-400">
-                  {item.cost} {learner.settings.theme.currency}
-                  {!item.active ? " · hidden" : ""}
-                </span>
-              </span>
-              <button type="button" onClick={() => void toggle(item)} disabled={busy === item.id} className={`min-h-[40px] rounded-lg px-3 text-xs font-bold ${item.active ? "bg-white text-slate-600 border border-slate-200" : "bg-indigo-600 text-white"} disabled:opacity-50`}>
-                {item.active ? "Hide" : "Show"}
-              </button>
-            </li>
-          ))}
+          {items.map((item) => {
+            const itemId = item.id;
+            const draft = itemId && editing?.id === itemId ? editing.draft : null;
+            const open = draft !== null;
+            const price = draft !== null ? Number.parseInt(draft, 10) : Number.NaN;
+            const priceValid = Number.isInteger(price) && price >= 1 && price <= MAX_REWARD_COST;
+            return (
+              <li key={itemId ?? item.title} className="rounded-xl bg-slate-50 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className={`min-w-0 flex-1 ${item.active ? "" : "opacity-60"}`}>
+                    <span className="block truncate text-sm font-semibold text-slate-900">{item.title}</span>
+                    <span className="block text-[11px] text-slate-400">
+                      {item.cost} {currency}
+                      {!item.active ? " · hidden" : ""}
+                    </span>
+                  </span>
+                  {itemId && (
+                    <button
+                      type="button"
+                      onClick={() => setEditing(open ? null : { id: itemId, draft: String(item.cost) })}
+                      aria-expanded={open}
+                      className="min-h-[44px] min-w-[44px] flex-shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600"
+                    >
+                      {open ? "Cancel" : "Edit price"}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void toggle(item)}
+                    disabled={!itemId || busy === itemId}
+                    className={`min-h-[44px] min-w-[44px] flex-shrink-0 rounded-lg px-3 text-xs font-bold ${item.active ? "border border-slate-200 bg-white text-slate-600" : "bg-indigo-600 text-white"} disabled:opacity-50`}
+                  >
+                    {item.active ? "Hide" : "Show"}
+                  </button>
+                </div>
+                {open && itemId && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <label className="flex min-w-0 flex-1 items-center gap-2">
+                      <span className="text-[11px] font-semibold text-slate-500">New price</span>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={MAX_REWARD_COST}
+                        value={draft ?? ""}
+                        onChange={(e) => setEditing({ id: itemId, draft: e.target.value })}
+                        className="min-h-[44px] w-20 rounded-xl border border-slate-200 bg-white px-2 text-center text-base font-bold text-slate-900 outline-none focus:border-indigo-400"
+                        aria-label={`New price for ${item.title}`}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void savePrice(itemId, price)}
+                      disabled={!priceValid || price === item.cost || busy === itemId}
+                      className="min-h-[44px] flex-shrink-0 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-40"
+                    >
+                      Save price
+                    </button>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       <div className="mt-3 flex gap-2">
-        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={80} placeholder="New reward" className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-400" />
-        <input type="number" inputMode="numeric" min={1} value={cost} onChange={(e) => setCost(Math.max(1, Number.parseInt(e.target.value || "1", 10) || 1))} className="w-20 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2.5 text-center text-sm font-bold text-slate-900 outline-none focus:border-indigo-400" aria-label="cost" />
+        <input
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            setError(null);
+          }}
+          maxLength={80}
+          placeholder="New reward"
+          className="min-h-[44px] min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-400"
+        />
+        <input
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={MAX_REWARD_COST}
+          value={cost}
+          onChange={(e) => setCost(Math.max(1, Math.min(MAX_REWARD_COST, Number.parseInt(e.target.value || "1", 10) || 1)))}
+          className="min-h-[44px] w-20 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2.5 text-center text-base font-bold text-slate-900 outline-none focus:border-indigo-400"
+          aria-label="cost"
+        />
         <button type="button" onClick={() => void add()} disabled={!title.trim() || busy === "new"} className="min-h-[44px] rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-40">
           Add
         </button>
       </div>
-      {error && <p className="mt-2 text-xs font-semibold text-rose-600">{error}</p>}
+      {error && (
+        <p className="mt-2 text-xs font-semibold text-rose-600" role="alert">
+          {error}
+        </p>
+      )}
+
+      {/* Redemptions log (Friday Close): what was cashed in, newest first */}
+      <div className="mt-3 border-t border-slate-100 pt-3">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Recent cash-ins</p>
+        {redemptions.length === 0 ? (
+          <p className="mt-1 text-xs text-slate-400">Nothing cashed in yet.</p>
+        ) : (
+          <ul className="mt-1.5 space-y-1">
+            {redemptions.map((r, i) => (
+              <li key={r.id ?? `${r.createdAt ?? ""}-${i}`} className="flex items-center gap-2 text-xs text-slate-600">
+                <span className="w-12 flex-shrink-0 font-semibold tabular-nums text-slate-400">{r.createdAt ? formatDateStr(familyDateOfIso(r.createdAt)) : "—"}</span>
+                <span className="min-w-0 flex-1 truncate">{titleOf.get(r.itemId) ?? "Reward"}</span>
+                <span className="flex-shrink-0 font-semibold tabular-nums text-slate-500">
+                  {r.cost} {r.pricedIn === "xp" ? "XP" : currency}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sunday review (design §3 stop / adjust table)
+// ---------------------------------------------------------------------------
+
+const BAND_CHIP: Record<ThermostatBand, { label: string; className: string }> = {
+  low: { label: "Under 70", className: "bg-rose-100 text-rose-700" },
+  hold: { label: "Hold 70-95", className: "bg-emerald-100 text-emerald-700" },
+  high: { label: "Over 95", className: "bg-indigo-100 text-indigo-700" },
+};
+
+function ratePct(rate: number | null): string {
+  return rate === null ? "—" : `${Math.round(rate * 100)}%`;
+}
+
+/** The subject's thermostat action without its leading "Math: " (the row already names the subject). */
+function subjectActionText(s: SundayReview["subjects"][number]): string {
+  if (!s.action) return "No scored items in the last 7 days.";
+  const prefix = `${s.label}: `;
+  return s.action.startsWith(prefix) ? s.action.slice(prefix.length) : s.action;
+}
+
+interface ReviewSignal {
+  label: string;
+  value: string;
+  detail: string;
+  flag: boolean;
+}
+
+function SundayReviewCard({ learner, review }: { learner: Learner; review: SundayReview }) {
+  const stopLabel = formatClockLabel(learner.settings.stopBy);
+  const mastered = review.skillsMasteredThisWeek;
+  const hint = review.hintRate;
+  const quick = review.quickWrongShare;
+  const retention = review.reviewRetention;
+  const signals: ReviewSignal[] = [
+    { label: "Hint rate", value: ratePct(hint.rate), detail: hint.of > 0 ? `${hint.count} of ${hint.of} learn items · flag over 40%` : "no learn items", flag: hint.flag },
+    ...(quick
+      ? [{ label: "Quick wrong taps", value: ratePct(quick.rate), detail: quick.of > 0 ? `${quick.count} of ${quick.of} wrong answers · flag over 20%` : "no wrong answers", flag: quick.flag }]
+      : []),
+    {
+      label: "Review retention",
+      value: ratePct(retention.rate),
+      detail: retention.of > 0 ? `${retention.count} of ${retention.of} sets passed · flag under 60%` : "no review sets",
+      flag: retention.flag,
+    },
+    {
+      label: "Skills mastered",
+      value: String(mastered.length),
+      detail: mastered.length > 0 ? `${mastered.slice(0, 3).map((s) => s.title).join(", ")}${mastered.length > 3 ? ` +${mastered.length - 3}` : ""}` : "none this week",
+      flag: false,
+    },
+    { label: "Stars this week", value: `${review.starsThisWeek}/${RING_CLOSE_AT}`, detail: `last week ${review.starsLastWeek}`, flag: false },
+    { label: `After ${stopLabel}`, value: String(review.blocksAfterStop), detail: "blocks ending late · should be 0", flag: review.blocksAfterStop > 0 },
+  ];
+
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-sm font-bold text-slate-900">
+          <span aria-hidden>{KID_EMOJI[learner.slug] ?? "⭐"}</span> {learner.name}
+        </p>
+        <p className="text-[11px] font-semibold text-slate-400">
+          {formatDateStr(review.from)} – {formatDateStr(review.to)}
+        </p>
+      </div>
+
+      <p className="mt-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Independent accuracy</p>
+      <ul className="mt-1 space-y-1.5">
+        {review.subjects.map((s) => (
+          <li key={s.kind} className="rounded-xl bg-slate-50 px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-800">{s.label}</span>
+              <span className="flex items-center gap-1.5">
+                <span className="text-sm font-bold tabular-nums text-slate-900">{ratePct(s.accuracy)}</span>
+                {s.total > 0 && (
+                  <span className="text-[10px] tabular-nums text-slate-400">
+                    {s.correct}/{s.total}
+                  </span>
+                )}
+                {s.band && <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${BAND_CHIP[s.band].className}`}>{BAND_CHIP[s.band].label}</span>}
+              </span>
+            </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-slate-500">{subjectActionText(s)}</p>
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-2 grid grid-cols-2 gap-1.5">
+        {signals.map((g) => (
+          <div key={g.label} className={`rounded-xl px-3 py-2 ${g.flag ? "bg-rose-50 ring-1 ring-rose-200" : "bg-slate-50"}`}>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">{g.label}</p>
+            <p className={`text-base font-bold tabular-nums ${g.flag ? "text-rose-700" : "text-slate-900"}`}>
+              {g.flag && (
+                <>
+                  <span aria-hidden>⚑ </span>
+                  <span className="sr-only">Flagged: </span>
+                </>
+              )}
+              {g.value}
+            </p>
+            <p className="text-[10px] leading-snug text-slate-500">{g.detail}</p>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Actions</p>
+      {review.actions.length === 0 ? (
+        <p className="mt-1 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">✓ All signals in range</p>
+      ) : (
+        <ul className="mt-1 space-y-1.5">
+          {review.actions.map((a) => (
+            <li key={a} className="rounded-xl bg-amber-50 px-3 py-2 text-xs leading-snug text-slate-800">
+              → {a}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -901,10 +1259,11 @@ function questionPromptOf(context: CoachLogMessage["context"]): string | null {
   return typeof prompt === "string" && prompt.trim() ? prompt : null;
 }
 
+/** "Oct 11 · 7:45 pm" in the family timezone. */
 function formatWhen(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return `${formatDateStr(familyDateOfIso(iso))} · ${formatClockMinutes(minutesSinceMidnightInFamilyTz(d))}`;
 }
 
 /** Collapsible per-kid list of the last 20 coach messages (fetched on expand). */
@@ -942,7 +1301,7 @@ function CoachLog({ learner }: { learner: Learner }) {
           {state.status === "error" && (
             <div className="flex items-center justify-between py-3">
               <p className="text-xs font-semibold text-rose-600">Couldn&apos;t load the coach log.</p>
-              <button type="button" onClick={() => void load()} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+              <button type="button" onClick={() => void load()} className="min-h-[44px] min-w-[44px] rounded-full bg-slate-100 px-4 text-xs font-bold text-slate-700">
                 Retry
               </button>
             </div>
@@ -970,7 +1329,7 @@ function CoachLog({ learner }: { learner: Learner }) {
             </ul>
           )}
           {state.status === "ready" && (
-            <button type="button" onClick={() => void load()} className="mt-3 flex min-h-[40px] w-full items-center justify-center rounded-xl bg-slate-50 text-xs font-bold text-slate-600">
+            <button type="button" onClick={() => void load()} className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-xl bg-slate-50 text-xs font-bold text-slate-600">
               Refresh
             </button>
           )}

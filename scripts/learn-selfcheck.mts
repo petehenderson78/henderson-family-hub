@@ -1490,7 +1490,8 @@ for (const id of generatorIds) {
       { ...sched("sm1", "2026-10-21", 1), masteredAt: new Date("2026-10-21T19:30:00-04:00").toISOString() },
       { ...emptyProgress("sz1"), status: "learning" as const, needsHelp: true, helpNote: "Which comes next?" },
     ];
-    const r = sundayReview({ attempts, progress, sessions: [], catalog: cat, today, settings: cole, slug: "cole" });
+    const oneNight = (date: string): SessionRecord => ({ learnerId: "l", date, minutes: 30, xp: 0, blocks: [], completed: true, status: "done" });
+    const r = sundayReview({ attempts, progress, sessions: [oneNight("2026-10-12"), oneNight("2026-10-20")], catalog: cat, today, settings: cole, slug: "cole" });
     const subj = (k: string) => r.subjects.find((x) => x.kind === k)!;
     assert(r.from === "2026-10-19" && r.to === today, "sunday: window is the last 7 family days", `${r.from}..${r.to}`);
     assert(subj("math").band === "low" && subj("math").total === 14 && subj("math").correct === 7 && /different worked example/.test(subj("math").action ?? ""), "sunday: math low band (hinted = miss, reviews included)", JSON.stringify(subj("math")));
@@ -1499,9 +1500,9 @@ for (const id of generatorIds) {
     assert(r.hintRate.count === 3 && r.hintRate.of === 40 && !r.hintRate.flag, "sunday: hint rate over learn items", JSON.stringify(r.hintRate));
     assert(r.reviewRetention.count === 1 && r.reviewRetention.of === 2 && r.reviewRetention.flag, "sunday: retention 1 of 2 sets (a 3-item set is not counted)", JSON.stringify(r.reviewRetention));
     assert(r.skillsMasteredThisWeek.map((s) => s.id).join(",") === "sm1" && r.mathSkillsMastered === 1, "sunday: skills mastered this week", JSON.stringify(r.skillsMasteredThisWeek.map((s) => s.id)));
-    assert(r.starsThisWeek === 0 && r.starsLastWeek === 0 && r.stuckSkills.map((s) => s.id).join(",") === "sz1", "sunday: stars and stuck flags", JSON.stringify([r.starsThisWeek, r.starsLastWeek]));
+    assert(r.starsThisWeek === 1 && r.starsLastWeek === 1 && r.stuckSkills.map((s) => s.id).join(",") === "sz1", "sunday: stars and stuck flags", JSON.stringify([r.starsThisWeek, r.starsLastWeek]));
     assert(r.blocksAfterStop === 2 && r.blocksAfterStopMonth === 3 && r.quickWrongShare === null, "sunday: blocks after 8:30 (week / 30 days); quick taps Lily only", JSON.stringify([r.blocksAfterStop, r.blocksAfterStopMonth]));
-    const expectActions = [/^Under 4 stars two weeks running/, /^Math: 50% independent/, /^Reading: over 95% two weeks running/, /^Review retention 50%/, /^Stuck flag on T sz1/, /^2 blocks ended after 8:30 pm this week/, /^3 blocks ended after 8:30 pm in the last 30 days/];
+    const expectActions = [/^Under 4 stars two weeks running \(1, then 1\)/, /^Math: 50% independent/, /^Reading: over 95% two weeks running/, /^Review retention 50%/, /^Stuck flag on T sz1/, /^2 blocks ended after 8:30 pm this week/, /^3 blocks ended after 8:30 pm in the last 30 days/];
     assert(r.actions.length === expectActions.length && expectActions.every((re, i) => re.test(r.actions[i])), "sunday: actions follow the stop / adjust table", JSON.stringify(r.actions));
 
     // Lily: hint rate and quick wrong taps.
@@ -1528,6 +1529,15 @@ for (const id of generatorIds) {
     ];
     const ok = sundayReview({ attempts: calm, progress: mergeProgress(cat, [{ ...sched("sm1", "2026-10-21", 1), masteredAt: new Date("2026-10-21T19:30:00-04:00").toISOString() }]), sessions: [...fiveStars("2026-10-12"), ...fiveStars("2026-10-19")], catalog: cat, today, settings: defaultSettings(1), slug: "lily" });
     assert(ok.actions.length === 0 && ok.starsThisWeek === 5 && ok.starsLastWeek === 5 && ok.reviewRetention.rate === 1 && ok.quickWrongShare?.flag === false && ok.subjects.every((x) => x.band !== "low"), "sunday: every signal in band → no actions", JSON.stringify(ok.actions));
+
+    // The ring rule needs two finished program weeks: no false alarm in the first fortnight.
+    const ringAction = (s: { actions: string[] }) => s.actions.some((a) => /^Under 4 stars two weeks running/.test(a));
+    const startOnly = [oneNight("2026-10-12")];
+    assert(!ringAction(sundayReview({ attempts: [], progress: {}, sessions: startOnly, catalog: cat, today: "2026-10-18", settings: cole, slug: "cole" })), "sunday: first Sunday of the program never flags the ring", "week before the program has no history");
+    assert(!ringAction(sundayReview({ attempts: [], progress: {}, sessions: startOnly, catalog: cat, today: "2026-10-21", settings: cole, slug: "cole" })), "sunday: midweek in week 2 compares weeks 0 and 1 → no flag", "week 0 is before the program");
+    assert(!ringAction(sundayReview({ attempts: [], progress: {}, sessions: [], catalog: cat, today, settings: cole, slug: "cole" })), "sunday: no sessions at all → no ring flag", "no history");
+    assert(ringAction(sundayReview({ attempts: [], progress: {}, sessions: [oneNight("2026-10-12"), oneNight("2026-10-20")], catalog: cat, today: "2026-10-28", settings: cole, slug: "cole" })), "sunday: midweek compares the two finished weeks (1, then 1) → flag", "weeks of Oct 12 and Oct 19");
+    assert(!ringAction(sundayReview({ attempts: [], progress: {}, sessions: [...fiveStars("2026-10-12"), oneNight("2026-10-20")], catalog: cat, today: "2026-10-28", settings: cole, slug: "cole" })), "sunday: a closed ring in either finished week → no flag", "5, then 1");
   }
 }
 

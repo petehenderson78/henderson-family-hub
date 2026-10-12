@@ -28,6 +28,8 @@ import {
   previousSchoolDay,
   todayInFamilyTz,
   weekDates,
+  weekStartDate,
+  weekdayIndexMon,
 } from "./dates";
 import {
   BLOCK_LABEL,
@@ -919,6 +921,16 @@ export function sundayReview(input: {
   const starsThisWeek = weeklyRing(sessions, today).stars;
   const lastWeekDay = addDaysToDateStr(today, -7);
   const starsLastWeek = weeklyRing(sessions, lastWeekDay).stars;
+  // The ring rule compares two FINISHED weeks of the program: this week counts
+  // only on Sunday (the review day); otherwise the two weeks before it. A week
+  // that began before the first loaded session (the program start, at first)
+  // has no history and never triggers the rule.
+  const ringWeekB = weekdayIndexMon(today) === 6 ? today : lastWeekDay;
+  const ringWeekA = addDaysToDateStr(ringWeekB, -7);
+  const firstSessionDate = sessions.reduce<string | null>((min, s) => (min === null || s.date < min ? s.date : min), null);
+  const ringHasHistory = firstSessionDate !== null && weekStartDate(ringWeekA) >= weekStartDate(firstSessionDate);
+  const ringStarsA = weeklyRing(sessions, ringWeekA).stars;
+  const ringStarsB = weeklyRing(sessions, ringWeekB).stars;
   const stuckSkills = catalog.filter((s) => progress[s.id]?.needsHelp === true);
 
   // Blocks ending after stopBy (or after midnight): the last answer of each subject × day.
@@ -944,8 +956,14 @@ export function sundayReview(input: {
   // The remaining stop / adjust rows, in the table's order.
   const windowDays = Array.from({ length: SUNDAY_REVIEW.days }, (_, i) => addDaysToDateStr(from, i));
   const pausedIn = (days: string[]) => days.some((d) => !isWeekend(d) && isPaused(settings, d, today));
-  if (starsThisWeek < SUNDAY_REVIEW.ringFloor && starsLastWeek < SUNDAY_REVIEW.ringFloor && !pausedIn(weekDates(today)) && !pausedIn(weekDates(lastWeekDay))) {
-    actions.unshift(`Under 4 stars two weeks running (${starsLastWeek}, then ${starsThisWeek}). Drop to a floor of 3 nights, or 10-10-5 blocks, for a fortnight. Never add.`);
+  if (
+    ringHasHistory &&
+    ringStarsA < SUNDAY_REVIEW.ringFloor &&
+    ringStarsB < SUNDAY_REVIEW.ringFloor &&
+    !pausedIn(weekDates(ringWeekA)) &&
+    !pausedIn(weekDates(ringWeekB))
+  ) {
+    actions.unshift(`Under 4 stars two weeks running (${ringStarsA}, then ${ringStarsB}). Drop to a floor of 3 nights, or 10-10-5 blocks, for a fortnight. Never add.`);
   }
   const math = subjects.find((s) => s.kind === "math");
   const quietWeek = windowDays.some((d) => isPaused(settings, d, today) || lightWeekMode(settings, d) === "review-only");
