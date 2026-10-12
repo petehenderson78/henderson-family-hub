@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { isKidLoginServer } from "@/lib/learn/server";
 import { Configuration, PlaidApi, PlaidEnvironments } from "plaid";
 import { mapPlaidCategory } from "@/lib/plaid-category-map";
 
@@ -23,6 +24,10 @@ export async function POST() {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  // Family finances are parents only (the Budget page redirects children too).
+  if (await isKidLoginServer(user.email)) {
+    return NextResponse.json({ error: "Parents only" }, { status: 403 });
   }
 
   try {

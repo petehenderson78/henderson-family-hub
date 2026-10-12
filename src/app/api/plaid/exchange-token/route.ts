@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { isKidLoginServer } from "@/lib/learn/server";
 import { Configuration, PlaidApi, PlaidEnvironments } from "plaid";
 
 const plaidClient = new PlaidApi(
@@ -22,6 +23,10 @@ export async function POST(request: NextRequest) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  // Family finances are parents only (the Budget page redirects children too).
+  if (await isKidLoginServer(user.email)) {
+    return NextResponse.json({ error: "Parents only" }, { status: 403 });
   }
 
   const body = await request.json();

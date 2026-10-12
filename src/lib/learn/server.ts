@@ -147,6 +147,21 @@ export async function kidSlugForLoginServer(email: string | null | undefined, le
   return list.find((l) => (l.email ?? "").trim().toLowerCase() === e)?.slug ?? null;
 }
 
+/**
+ * True for a child's login (cole@/lily@, or a learner's email). For guarding
+ * parent-only routes such as the family finances: when the Learn tables are
+ * missing or unreachable, the cole@/lily@ rule still applies.
+ */
+export async function isKidLoginServer(email: string | null | undefined): Promise<boolean> {
+  if (kidSlugForEmail(email)) return true;
+  try {
+    return (await kidSlugForLoginServer(email)) !== null;
+  } catch (e) {
+    if (e instanceof LearnLoadError) return false;
+    throw e;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Learners, progress, sessions, ledger
 // ---------------------------------------------------------------------------
