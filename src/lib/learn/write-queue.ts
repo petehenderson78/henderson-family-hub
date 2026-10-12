@@ -274,6 +274,11 @@ function markTried(slug: string, id: string, storage: QueueStorage | null): void
  */
 export type WriteExecutor = (write: PendingWrite, replay: boolean) => Promise<unknown>;
 
+/** True when the browser reports no network (false in Node and when unknown). */
+function browserIsOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
 async function runPass(slug: string, exec: WriteExecutor, storage: QueueStorage | null): Promise<FlushResult> {
   flags.set(slug, { ...(flags.get(slug) ?? { lastFailed: false }), flushing: true });
   refresh(slug, storage);
@@ -297,6 +302,13 @@ async function runPass(slug: string, exec: WriteExecutor, storage: QueueStorage 
           dropped += 1;
         } else {
           failed += 1;
+          // Offline: every later write would fail the same way. Stop this pass (the
+          // queue stays in order and retries on 'online'); a one-off server error
+          // still lets the writes behind it through.
+          if (browserIsOffline()) {
+            refresh(slug, storage);
+            break;
+          }
         }
       }
       refresh(slug, storage);
