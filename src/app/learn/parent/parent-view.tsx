@@ -34,6 +34,7 @@ import { isLearnWriteError, loadLearners, loadProgress, saveProgress, updateLear
 import { addNote, logFinishedBook, updateRewardItem, upsertRewardItem, NOTE_KIND_LABEL, type LearnNote, type Redemption, type RewardItem } from "@/lib/learn/store-notes";
 import { fetchCoachLog } from "@/lib/learn/coach-client";
 import type { CoachLogMessage } from "@/lib/learn/coach-types";
+import type { StreakSessions } from "@/lib/learn/server";
 import { KID_EMOJI } from "../learn-home";
 import ProgressRing from "../components/progress-ring";
 import StreakFlame from "../components/streak-flame";
@@ -43,6 +44,8 @@ export interface ParentKid {
   learner: Learner;
   progressRows: SkillProgress[];
   sessions: SessionRecord[];
+  /** session rows for the streak (the whole program history, server.ts loadStreakSessionsServer) */
+  streak: StreakSessions;
   /** XP (level ladder only) */
   xpTotal: number;
   /** spendable input points (points earned − redemptions) */
@@ -61,8 +64,6 @@ export interface ParentKid {
 interface ParentViewProps {
   kids: ParentKid[];
   today: string;
-  /** the lower date bound of the sessions load (every session from it on is in `sessions`): the streak walk's floor */
-  sessionsFrom: string;
   nowIso: string;
   /** from the server page: Boolean(ANTHROPIC_API_KEY) */
   coachEnabled: boolean;
@@ -71,7 +72,7 @@ interface ParentViewProps {
 /** The private Learning Lab page (the repo is public, so the guides are not in it). */
 const GUIDES_URL = "https://claude.ai/artifact/5j4b47BLawrNQR5AgN7W84";
 
-export default function ParentView({ kids, today, sessionsFrom, nowIso, coachEnabled }: ParentViewProps) {
+export default function ParentView({ kids, today, nowIso, coachEnabled }: ParentViewProps) {
   const router = useRouter();
   const now = new Date(nowIso);
   const week = weekDates(today);
@@ -94,7 +95,7 @@ export default function ParentView({ kids, today, sessionsFrom, nowIso, coachEna
       mastered: masteredCount(catalog, progressMap),
       minutesWeek: minutesThisWeek(k.sessions, today),
       xpWeek: xpThisWeek(k.sessions, today),
-      streak: computeStreakInfo(k.sessions, today, k.learner.settings, sessionsFrom),
+      streak: computeStreakInfo(k.streak.sessions, today, k.learner.settings, k.streak.loadedFrom),
       ring: weeklyRing(k.sessions, today),
       // Paused days push reviews back (the planner's rule), so a vacation never shows a pile of due reviews.
       due: reviewDueCount(catalog, progressMap, now, k.learner.settings, today),
@@ -159,8 +160,7 @@ export default function ParentView({ kids, today, sessionsFrom, nowIso, coachEna
                   </p>
                 </div>
                 <div className="flex flex-shrink-0 items-center" title={d.streak.complete ? undefined : `At least ${d.streak.streak} days (older nights were not loaded)`}>
-                  <StreakFlame streak={d.streak.streak} size="sm" />
-                  {!d.streak.complete && <span className="ml-0.5 text-sm font-bold text-orange-600">+</span>}
+                  <StreakFlame streak={d.streak.streak} size="sm" atLeast={!d.streak.complete} />
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">

@@ -8,7 +8,7 @@ import { catalogFor } from "@/lib/learn/catalog";
 import { kindProgress, ladderFor, mergeProgress } from "@/lib/learn/mastery";
 import {
   POINTS,
-  computeStreak,
+  computeStreakInfo,
   isPaused,
   isWeekend,
   missionLaunchLine,
@@ -35,6 +35,10 @@ interface MissionViewProps {
   learner: Learner;
   progressRows: SkillProgress[];
   sessions: SessionRecord[];
+  /** the streak's history (date / status / completed since the program start or 400 days) */
+  streakSessions: SessionRecord[];
+  /** that read's lower date bound for computeStreakInfo (null = the whole history) */
+  streakFrom: string | null;
   /** recent learn_notes (Lily's homework rule) */
   notes: LearnNote[];
   /** XP (level ladder only) */
@@ -56,6 +60,8 @@ export default function MissionView({
   learner,
   progressRows,
   sessions,
+  streakSessions,
+  streakFrom,
   notes,
   xpTotal,
   balance: initialBalance,
@@ -77,7 +83,14 @@ export default function MissionView({
   const weekend = isWeekend(today);
   const blocks: SessionBlock[] = todaysBlocks({ learner, catalog, progressMap, sessions, now, today, notes });
   const kinds = kindProgress(blocks);
-  const streak = computeStreak(sessions, today, settings);
+  // Today's row from the 60-day read wins (same row; the streak read has no blocks).
+  const streakInfo = computeStreakInfo(
+    session ? [...streakSessions.filter((s) => s.date !== today), session] : streakSessions,
+    today,
+    settings,
+    streakFrom
+  );
+  const streak = streakInfo.streak;
   const ring = weeklyRing(sessions, today);
   const role = missionRole(sessions, today);
   const due = reviewDueCount(catalog, progressMap, now, settings, today);
@@ -103,7 +116,7 @@ export default function MissionView({
   function cheer() {
     const note = [
       `This week: ${ring.stars} of ${ring.target} stars.`,
-      `Streak: ${streak} day${streak === 1 ? "" : "s"}.`,
+      `Streak: ${streakInfo.complete ? "" : "at least "}${streak} day${streak === 1 ? "" : "s"}.`,
       kinds.length > 0 ? `Today: ${doneCount} of ${kinds.length} blocks done.` : paused ? "Vacation mode." : "No mission planned yet.",
       nextBlock ? `Next up: ${nextBlock.label}.` : kinds.length > 0 ? "Mission complete!" : "",
       due > 0 ? `${due} review${due === 1 ? "" : "s"} due.` : "",
@@ -130,7 +143,7 @@ export default function MissionView({
             </h1>
             <p className="mt-0.5 text-sm font-medium text-slate-400">{screen === "diamond" ? "Lightning Dash" : screen === "tutu" ? "Sparkle Stage" : "Mission Control"}</p>
             <div className="mt-2 flex items-center gap-2">
-              <StreakFlame streak={streak} size="sm" />
+              <StreakFlame streak={streak} size="sm" atLeast={!streakInfo.complete} />
               <span className="text-[11px] font-semibold text-slate-400">{paused ? "streak frozen" : "day streak"}</span>
             </div>
           </div>

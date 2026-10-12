@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import type { Learner, Workshop } from "@/lib/learn/types";
-import { WORKSHOPS, featuredWorkshops } from "@/lib/learn/workshops";
+import { WORKSHOPS, featuredWorkshops, workshopShowPrefix } from "@/lib/learn/workshops";
 import { isoWeekNumber } from "@/lib/learn/dates";
 import { POINTS } from "@/lib/learn/stats";
 import { awardPoints, newClientId } from "@/lib/learn/store";
@@ -28,6 +28,8 @@ export default function WorkshopsView({ learner, doneThisWeek, weekPoints, today
   const [error, setError] = useState<string | null>(null);
   const [paid, setPaid] = useState<Record<string, number>>({});
   const [justDone, setJustDone] = useState<string | null>(null);
+  /** One pair of client ids per workshop until the save succeeds, so a retry can't log a second Show or pay twice. */
+  const actionIds = useRef(new Map<string, { note: string; points: string }>());
   const currency = learner.settings.theme.currency;
 
   const featured = featuredWorkshops(isoWeekNumber(today));
@@ -41,19 +43,23 @@ export default function WorkshopsView({ learner, doneThisWeek, weekPoints, today
     if (isKid || done.has(w.id) || saving || !show) return;
     setSaving(w.id);
     setError(null);
+    const ids = actionIds.current.get(w.id) ?? { note: newClientId(), points: newClientId() };
+    actionIds.current.set(w.id, ids);
     try {
       await addNote({
         learnerId: learner.id,
         date: today,
         kind: "other",
         subject: "workshop",
-        text: `Workshop Show — ${w.title}: ${show}`,
+        text: `${workshopShowPrefix(w)} ${show}`,
         minutes: w.minutes,
         score: null,
         total: null,
         standards: [],
+        clientId: ids.note,
       });
-      const points = await awardPoints(learner.id, "workshop", { today, detail: w.id, clientId: newClientId() });
+      const points = await awardPoints(learner.id, "workshop", { today, detail: w.id, clientId: ids.points });
+      actionIds.current.delete(w.id);
       setPaid((p) => ({ ...p, [w.id]: points }));
       setDone((d) => new Set(d).add(w.id));
       setJustDone(w.id);
@@ -146,8 +152,8 @@ export default function WorkshopsView({ learner, doneThisWeek, weekPoints, today
   return (
     <div className="min-h-[100dvh] bg-[#F8FAFC] pb-28">
       <div className="mx-auto max-w-lg px-4 pt-8">
-        <Link href={base} className="-ml-1 inline-flex min-h-[44px] items-center pl-1 pr-3 text-xs font-semibold text-slate-400">
-          ← Mission Control
+        <Link href={isKid ? base : "/learn/tonight"} className="-ml-1 inline-flex min-h-[44px] items-center pl-1 pr-3 text-xs font-semibold text-slate-400">
+          {isKid ? "← Mission Control" : "← Tonight"}
         </Link>
         <h1 className="mt-3 text-[28px] font-bold tracking-tight text-slate-900">Workshops 🛠️</h1>
         <p className="mt-1.5 text-sm font-medium text-slate-400">

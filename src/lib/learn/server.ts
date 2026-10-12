@@ -13,6 +13,12 @@
  * coach API route.
  *
  * Every read that can pass PostgREST's 1000-row cap is paged (selectAllPages).
+ *
+ * STREAK: the flame walks back over every evening since the program began, so
+ * pages read a separate, lightweight streak history (loadStreakSessionsServer:
+ * date / status / completed from max(LEARN_PROGRAM_START, today − 399 days))
+ * and pass its `loadedFrom` to computeStreakInfo. The 14- / 60-day session
+ * windows stay as they are for everything else (ring, homework rule, missions).
  */
 
 import { createElement, type ReactElement } from "react";
@@ -197,6 +203,56 @@ export async function loadRecentSessionsServer(learnerId: string, days = 60, tod
   });
 }
 
+/** The first evening of the program (Mon Oct 12, 2026): the streak never counts a day before it. */
+export const LEARN_PROGRAM_START = "2026-10-12";
+
+/** Days of session history read for the streak (FR-15): a 60-day window stopped it growing after two months. */
+export const STREAK_HISTORY_DAYS = 400;
+
+/** The session rows the streak walks, and where that read started. */
+export interface StreakSessions {
+  /** learn_sessions on or after the window start (date, status, completed, skip_reason; blocks empty), newest first */
+  sessions: SessionRecord[];
+  /**
+   * The read's lower date bound for computeStreakInfo(…, loadedFrom): null when
+   * the window reaches back to LEARN_PROGRAM_START (the rows are the whole
+   * history, so the walk is complete), else the first date read (a streak that
+   * reaches it unbroken is a lower bound).
+   */
+  loadedFrom: string | null;
+}
+
+/** The streak window for `today`: from max(LEARN_PROGRAM_START, today − 399 days). */
+export function streakWindowFor(today: string): { from: string; loadedFrom: string | null } {
+  const back = addDaysToDateStr(today, -(STREAK_HISTORY_DAYS - 1));
+  return back > LEARN_PROGRAM_START ? { from: back, loadedFrom: back } : { from: LEARN_PROGRAM_START, loadedFrom: null };
+}
+
+/**
+ * The streak's session history (see StreakSessions): a lightweight paged read
+ * without blocks, minutes or xp. Pass the result to
+ * computeStreakInfo(sessions, today, learner.settings, loadedFrom). Throws LearnLoadError.
+ */
+export async function loadStreakSessionsServer(learnerId: string, today = todayInFamilyTz()): Promise<StreakSessions> {
+  return guarded("loadStreakSessions", async () => {
+    const supabase = await createClient();
+    const { from, loadedFrom } = streakWindowFor(today);
+    const { data, error } = await selectAllPages<Pick<SessionRow, "learner_id" | "date" | "status" | "completed" | "skip_reason">>((start, end) =>
+      supabase
+        .from("learn_sessions")
+        .select("learner_id, date, status, completed, skip_reason")
+        .eq("learner_id", learnerId)
+        .gte("date", from)
+        .lte("date", today)
+        .order("date", { ascending: false })
+        .range(start, end)
+    );
+    if (error) fail("loadStreakSessions", error);
+    const sessions = data.map((row) => sessionFromRow({ ...row, minutes: 0, xp: 0, blocks: [] }));
+    return { sessions, loadedFrom };
+  });
+}
+
 /** XP for the level ladder: the ledger without point rows ("pt:") and legacy redemptions ("redeem:"). */
 export async function loadXpTotalServer(learnerId: string): Promise<number> {
   return guarded("loadXpTotal", async () => {
@@ -242,19 +298,22 @@ export interface LearnerBundle {
   notes: LearnNote[];
   /** this week's ledger rows */
   weekRewards: RewardRecord[];
+  /** the streak's history (loadStreakSessionsServer): computeStreakInfo(streak.sessions, today, settings, streak.loadedFrom) */
+  streak: StreakSessions;
 }
 
 /** Everything a kid page needs, in parallel. null when there is no such learner; throws LearnLoadError. */
 export async function loadLearnerBundleServer(slug: string, today = todayInFamilyTz()): Promise<LearnerBundle | null> {
   const learner = await loadLearnerServer(slug);
   if (!learner) return null;
-  const [progress, sessions, notes, weekRewards] = await Promise.all([
+  const [progress, sessions, notes, weekRewards, streak] = await Promise.all([
     loadProgressServer(learner.id),
     loadRecentSessionsServer(learner.id, 60, today),
     loadNotesServer(learner.id, addDaysToDateStr(today, -7), today),
     loadWeekRewardsServer(learner.id, today),
+    loadStreakSessionsServer(learner.id, today),
   ]);
-  return { learner, progress, sessions, notes, weekRewards };
+  return { learner, progress, sessions, notes, weekRewards, streak };
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +492,12 @@ export interface TonightKidBundle {
   notes: LearnNote[];
   /** this week's ledger rows (points, surprise bonus given today) */
   weekRewards: RewardRecord[];
+  /** the streak's history (loadStreakSessionsServer) */
+  streak: StreakSessions;
+  /** spendable points (points earned − redemptions) for the parent's Rewards sheet */
+  balance: number;
+  /** the learner's reward store (active and inactive; the sheet shows the active ones) */
+  rewardItems: RewardItem[];
 }
 
 /** Both kids for the Tonight runner, in parallel. Throws LearnLoadError. */
@@ -440,13 +505,16 @@ export async function loadTonightBundleServer(today = todayInFamilyTz()): Promis
   const learners = await loadLearnersServer();
   return Promise.all(
     learners.map(async (learner) => {
-      const [progress, sessions, notes, weekRewards] = await Promise.all([
+      const [progress, sessions, notes, weekRewards, streak, wallet, rewardItems] = await Promise.all([
         loadProgressServer(learner.id),
         loadRecentSessionsServer(learner.id, 14, today),
         loadNotesServer(learner.id, addDaysToDateStr(today, -7), today),
         loadWeekRewardsServer(learner.id, today),
+        loadStreakSessionsServer(learner.id, today),
+        loadWalletServer(learner.id, today),
+        loadRewardItemsServer(learner.id),
       ]);
-      return { learner, progress, sessions, notes, weekRewards };
+      return { learner, progress, sessions, notes, weekRewards, streak, balance: wallet.balance, rewardItems };
     })
   );
 }

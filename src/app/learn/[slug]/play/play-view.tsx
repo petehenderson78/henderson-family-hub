@@ -48,13 +48,13 @@ import {
   sessionStatusFor,
   shouldFilterGuess,
   skipCheckBand,
-  streakFromSessions,
   xpFor,
   type SkipCheckBand,
 } from "@/lib/learn/mastery";
 import { answerText, gradeAnswer } from "@/lib/learn/grade";
 import {
   POINTS,
+  computeStreakInfo,
   formatClockLabel,
   isWeekend,
   pointReason,
@@ -88,6 +88,10 @@ interface PlayViewProps {
   learner: Learner;
   progressRows: SkillProgress[];
   sessions: SessionRecord[];
+  /** the streak's history (server loadStreakSessionsServer: date / status / completed) */
+  streakSessions: SessionRecord[];
+  /** that read's lower date bound for computeStreakInfo (null = the whole history) */
+  streakFrom: string | null;
   /** learn_notes of the last days (Lily's homework rule; pony names) */
   notes: LearnNote[];
   /** this week's ledger rows (points caps, replay decay) */
@@ -468,7 +472,8 @@ export default function PlayView(props: PlayViewProps) {
     <Player
       run={run}
       learner={learner}
-      sessions={props.sessions}
+      streakSessions={props.streakSessions}
+      streakFrom={props.streakFrom}
       notes={props.notes}
       weekRewards={props.weekRewards}
       today={today}
@@ -484,7 +489,9 @@ export default function PlayView(props: PlayViewProps) {
 interface PlayerProps {
   run: Run;
   learner: Learner;
-  sessions: SessionRecord[];
+  /** the streak's history and its lower date bound (summary card streak) */
+  streakSessions: SessionRecord[];
+  streakFrom: string | null;
   notes: LearnNote[];
   weekRewards: RewardRecord[];
   today: string;
@@ -495,7 +502,7 @@ interface PlayerProps {
   forceIntro: boolean;
 }
 
-function Player({ run, learner, sessions, notes, weekRewards, today, coachEnabled, backHref, backLabel, returnParam, forceIntro }: PlayerProps) {
+function Player({ run, learner, streakSessions, streakFrom, notes, weekRewards, today, coachEnabled, backHref, backLabel, returnParam, forceIntro }: PlayerProps) {
   const settings = learner.settings;
   const autoSpeak = settings.autoSpeak;
   const early = learner.grade <= 2;
@@ -748,7 +755,10 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
     (blockPatch: Partial<SessionBlock>, minutesSpent: number, xp: number): SessionRecord | null => {
       if (run.blockIndex === null || run.blocks[run.blockIndex]?.done) return null;
       const blocks = run.blocks.map((b, i) => (i === run.blockIndex ? { ...b, ...blockPatch } : b));
-      const status = sessionStatusFor(blocks);
+      // A night already closed (every block done, or a parent's "Weekend set done") stays done:
+      // extra practice after it never takes the star away.
+      const alreadyDone = run.session?.status === "done" || run.session?.completed === true;
+      const status = alreadyDone ? "done" : sessionStatusFor(blocks);
       const session: SessionRecord = {
         learnerId: learner.id,
         date: today,
@@ -768,10 +778,10 @@ function Player({ run, learner, sessions, notes, weekRewards, today, coachEnable
 
   const streakAfter = useCallback(
     (session: SessionRecord | null) => {
-      const others = sessions.filter((s) => s.date !== today);
-      return streakFromSessions(session ? [...others, session] : sessions, today, settings);
+      const others = streakSessions.filter((s) => s.date !== today);
+      return computeStreakInfo(session ? [...others, session] : streakSessions, today, settings, streakFrom).streak;
     },
-    [sessions, today, settings]
+    [streakSessions, streakFrom, today, settings]
   );
 
   const changesFor = useCallback(

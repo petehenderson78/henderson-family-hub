@@ -1,10 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import DashboardView, { type LearningSummary } from "./dashboard-view";
-import { kidSlugForLoginServer, LearnLoadError, loadLearnersServer, loadRecentSessionsServer } from "@/lib/learn/server";
+import { kidSlugForLoginServer, LearnLoadError, loadLearnersServer, loadRecentSessionsServer, loadStreakSessionsServer } from "@/lib/learn/server";
 import type { Learner } from "@/lib/learn/types";
 import { todayInFamilyTz } from "@/lib/learn/dates";
-import { computeStreak, sessionForDate, todayStatus } from "@/lib/learn/stats";
+import { computeStreakInfo, sessionForDate, todayStatus } from "@/lib/learn/stats";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -73,7 +73,11 @@ export default async function Home() {
   try {
     learning = await Promise.all(
       learners.map(async (learner) => {
-        const sessions = await loadRecentSessionsServer(learner.id, 60, learnToday);
+        // Today's row from a short window; the streak from the whole program history (FR-15).
+        const [sessions, streak] = await Promise.all([
+          loadRecentSessionsServer(learner.id, 7, learnToday),
+          loadStreakSessionsServer(learner.id, learnToday),
+        ]);
         const t = todayStatus(sessionForDate(sessions, learnToday));
         return {
           slug: learner.slug,
@@ -81,7 +85,7 @@ export default async function Home() {
           status: t.status,
           blocksDone: t.blocksDone,
           blocksTotal: t.blocksTotal,
-          streak: computeStreak(sessions, learnToday, learner.settings),
+          streak: computeStreakInfo(streak.sessions, learnToday, learner.settings, streak.loadedFrom).streak,
         };
       })
     );

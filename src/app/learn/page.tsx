@@ -1,9 +1,16 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import { kidSlugForLoginServer, learnLoadErrorPage, loadLearnersServer, loadRecentSessionsServer, loadWalletServer } from "@/lib/learn/server";
+import {
+  kidSlugForLoginServer,
+  learnLoadErrorPage,
+  loadLearnersServer,
+  loadRecentSessionsServer,
+  loadStreakSessionsServer,
+  loadWalletServer,
+} from "@/lib/learn/server";
 import type { Learner } from "@/lib/learn/types";
 import { todayInFamilyTz } from "@/lib/learn/dates";
-import { computeStreak, isPaused, sessionForDate, todayStatus } from "@/lib/learn/stats";
+import { computeStreakInfo, isPaused, sessionForDate, todayStatus } from "@/lib/learn/stats";
 import LearnHome, { type KidSummary } from "./learn-home";
 
 export const dynamic = "force-dynamic";
@@ -34,14 +41,27 @@ export default async function LearnPage() {
   try {
     kids = await Promise.all(
       learners.map(async (learner) => {
-        const [sessions, wallet] = await Promise.all([loadRecentSessionsServer(learner.id, 60, today), loadWalletServer(learner.id, today)]);
-        const t = todayStatus(sessionForDate(sessions, today));
+        const [sessions, streakRows, wallet] = await Promise.all([
+          loadRecentSessionsServer(learner.id, 60, today),
+          loadStreakSessionsServer(learner.id, today),
+          loadWalletServer(learner.id, today),
+        ]);
+        const todayRow = sessionForDate(sessions, today);
+        const t = todayStatus(todayRow);
+        // The streak walks the whole history since the program start (FR-15), not the 60-day window.
+        const streak = computeStreakInfo(
+          todayRow ? [...streakRows.sessions.filter((s) => s.date !== today), todayRow] : streakRows.sessions,
+          today,
+          learner.settings,
+          streakRows.loadedFrom
+        );
         return {
           learner,
           status: t.status,
           blocksDone: t.blocksDone,
           blocksTotal: t.blocksTotal,
-          streak: computeStreak(sessions, today, learner.settings),
+          streak: streak.streak,
+          streakAtLeast: !streak.complete,
           xp: wallet.xp,
           paused: isPaused(learner.settings, today),
         };

@@ -7,7 +7,11 @@ import TonightView, { type TonightKid } from "./tonight-view";
 
 export const dynamic = "force-dynamic";
 
-/** The one-adult evening runner: both missions, the 6-minute rotation, scripts, homework, notes. Parents only. */
+/**
+ * The one-adult evening runner: both missions, the 6-minute rotation, scripts,
+ * homework, notes, and the parent's night actions (skip a night, close the
+ * weekend set, cash in a reward). Parents only.
+ */
 export default async function TonightPage() {
   const supabase = await createClient();
   const {
@@ -35,7 +39,17 @@ export default async function TonightPage() {
   }
   // Youngest first: the rotation opens each block with Lily (design §2.1).
   const kids: TonightKid[] = bundles
-    .map((b) => ({ learner: b.learner, progressRows: b.progress, sessions: b.sessions, notes: b.notes, weekRewards: b.weekRewards }))
+    .map((b) => ({
+      learner: b.learner,
+      progressRows: b.progress,
+      sessions: b.sessions,
+      streakSessions: b.streak.sessions,
+      streakFrom: b.streak.loadedFrom,
+      notes: b.notes,
+      weekRewards: b.weekRewards,
+      balance: b.balance,
+      rewardItems: b.rewardItems,
+    }))
     .sort((a, b) => a.learner.grade - b.learner.grade);
 
   return <TonightView kids={kids} today={today} nowIso={new Date().toISOString()} coachEnabled={coachEnabled()} />;

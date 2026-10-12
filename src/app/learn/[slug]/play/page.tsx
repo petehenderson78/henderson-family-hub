@@ -76,6 +76,8 @@ export default async function PlayPage({ params, searchParams }: PlayPageProps) 
       learner={bundle.learner}
       progressRows={bundle.progress}
       sessions={bundle.sessions}
+      streakSessions={bundle.streak.sessions}
+      streakFrom={bundle.streak.loadedFrom}
       notes={[...bundle.notes, ...ponyNotes]}
       weekRewards={bundle.weekRewards}
       today={today}

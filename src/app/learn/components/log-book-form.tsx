@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { addNote, LOGGABLE_NOTE_KINDS, NOTE_KIND_LABEL, parseStandards, type LearnNote, type NoteKind } from "@/lib/learn/store-notes";
+import { newClientId } from "@/lib/learn/store";
+import { addNote, isLearnWriteError, LOGGABLE_NOTE_KINDS, NOTE_KIND_LABEL, parseStandards, type LearnNote, type NoteKind } from "@/lib/learn/store-notes";
 
 export interface LogBookLearner {
   id: string;
@@ -23,7 +24,10 @@ const SUBJECTS = ["math", "reading", "phonics", "writing", "reasoning", "other"]
 
 /**
  * "Log book work": the family's physical books, school sheets and read-alouds
- * become learn_notes rows (the evidence pack reads them). INSERT-only.
+ * become learn_notes rows (the evidence pack reads them). INSERT-only. One
+ * client id per entry, reused when "Couldn't save" is retried, so a lost
+ * response never logs the same work twice. (A finished book with its 2 points
+ * is Tonight's "Finished a book", logFinishedBook.)
  */
 export default function LogBookForm({ learners, today, defaultLearnerId, defaultKind = "book", onSaved, title = "Log book work" }: LogBookFormProps) {
   const [learnerId, setLearnerId] = useState(defaultLearnerId ?? learners[0]?.id ?? "");
@@ -35,17 +39,24 @@ export default function LogBookForm({ learners, today, defaultLearnerId, default
   const [total, setTotal] = useState("");
   const [standards, setStandards] = useState("");
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [errorText, setErrorText] = useState<string | null>(null);
+  /** the pending entry's client id (kept across retries, cleared after a save or a learner switch) */
+  const [entryId, setEntryId] = useState<string | null>(null);
 
   const field = "w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-base text-slate-900 outline-none focus:border-indigo-400";
   const canSave = learnerId && (text.trim().length > 0 || kind !== "other") && state !== "saving";
 
   async function save() {
     if (!canSave) return;
+    const clientId = entryId ?? newClientId();
+    setEntryId(clientId);
     setState("saving");
+    setErrorText(null);
     const scoreNum = score.trim() === "" ? null : Number.parseInt(score, 10);
     const totalNum = total.trim() === "" ? null : Number.parseInt(total, 10);
     try {
       const saved = await addNote({
+        clientId,
         learnerId,
         date: today,
         kind,
@@ -57,13 +68,16 @@ export default function LogBookForm({ learners, today, defaultLearnerId, default
         standards: parseStandards(standards),
       });
       setState("saved");
+      setEntryId(null);
       setText("");
       setScore("");
       setTotal("");
       setStandards("");
       onSaved?.(saved);
-    } catch {
+    } catch (err) {
       setState("error");
+      // A refusal (a login that may not write) has its own calm text; anything else is worth a retry.
+      setErrorText(isLearnWriteError(err) && err.code !== "failed" ? err.message : null);
     }
   }
 
@@ -81,6 +95,7 @@ export default function LogBookForm({ learners, today, defaultLearnerId, default
               onClick={() => {
                 setLearnerId(l.id);
                 setState("idle");
+                setEntryId(null);
               }}
               className={`min-h-[44px] rounded-xl text-sm font-bold ${learnerId === l.id ? "bg-indigo-600 text-white" : "bg-slate-50 text-slate-600"}`}
             >
@@ -157,6 +172,7 @@ export default function LogBookForm({ learners, today, defaultLearnerId, default
       >
         {state === "saving" ? "Saving…" : state === "saved" ? "Logged ✓ — log another" : state === "error" ? "Couldn't save — tap to retry" : "Log it"}
       </button>
+      {state === "error" && errorText && <p className="mt-1.5 text-[11px] font-semibold text-amber-800">{errorText}</p>}
     </div>
   );
 }

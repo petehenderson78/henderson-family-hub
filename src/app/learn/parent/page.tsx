@@ -7,6 +7,7 @@ import {
   loadNotesServer,
   loadProgressServer,
   loadRecentSessionsServer,
+  loadStreakSessionsServer,
   loadRedemptionsServer,
   loadRewardItemsServer,
   loadWalletServer,
@@ -49,14 +50,14 @@ export default async function ParentPage() {
 
   // Mark mastered and the review panel read from these rows: a failed read shows the retry card, never empty data.
   const today = todayInFamilyTz();
-  const sessionsFrom = addDaysToDateStr(today, -(SESSION_DAYS - 1));
   let kids: ParentKid[];
   try {
     kids = await Promise.all(
       learners.map(async (learner) => {
-        const [progressRows, sessions, wallet, rewardItems, notes, redemptions, attempts] = await Promise.all([
+        const [progressRows, sessions, streak, wallet, rewardItems, notes, redemptions, attempts] = await Promise.all([
           loadProgressServer(learner.id),
           loadRecentSessionsServer(learner.id, SESSION_DAYS, today),
+          loadStreakSessionsServer(learner.id, today),
           loadWalletServer(learner.id, today),
           loadRewardItemsServer(learner.id),
           loadNotesServer(learner.id, addDaysToDateStr(today, -7), today),
@@ -69,6 +70,7 @@ export default async function ParentPage() {
           learner,
           progressRows,
           sessions,
+          streak,
           xpTotal: wallet.xp,
           balance: wallet.balance,
           weekPoints: wallet.weekPoints,
@@ -83,5 +85,5 @@ export default async function ParentPage() {
     return learnLoadErrorPage(e, "/learn/parent");
   }
 
-  return <ParentView kids={kids} today={today} sessionsFrom={sessionsFrom} nowIso={new Date().toISOString()} coachEnabled={coachEnabled()} />;
+  return <ParentView kids={kids} today={today} nowIso={new Date().toISOString()} coachEnabled={coachEnabled()} />;
 }

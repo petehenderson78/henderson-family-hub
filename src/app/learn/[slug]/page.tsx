@@ -55,6 +55,8 @@ export default async function KidPage({ params }: { params: Promise<{ slug: stri
       learner={bundle.learner}
       progressRows={bundle.progress}
       sessions={bundle.sessions}
+      streakSessions={bundle.streak.sessions}
+      streakFrom={bundle.streak.loadedFrom}
       notes={bundle.notes}
       xpTotal={wallet.xp}
       balance={wallet.balance}

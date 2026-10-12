@@ -14,6 +14,8 @@ export interface KidSummary {
   blocksDone: number;
   blocksTotal: number;
   streak: number;
+  /** the streak is a lower bound (its walk reached the oldest loaded day unbroken) */
+  streakAtLeast?: boolean;
   xp: number;
   paused?: boolean;
 }
@@ -118,7 +120,7 @@ export default function LearnHome({ kids, nowIso }: LearnHomeProps) {
                       )}
                     </p>
                   </div>
-                  <StreakFlame streak={k.streak} size="sm" />
+                  <StreakFlame streak={k.streak} size="sm" atLeast={k.streakAtLeast} />
                 </Link>
               );
             })}

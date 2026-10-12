@@ -127,6 +127,11 @@ export const WORKSHOPS: Workshop[] = [
   },
 ];
 
+/** The start of a workshop's Show note ("Workshop Show — <title>:"), used to write it and to find it again. */
+export function workshopShowPrefix(w: Pick<Workshop, "title">): string {
+  return `Workshop Show — ${w.title}:`;
+}
+
 export function workshopById(id: string): Workshop | undefined {
   return WORKSHOPS.find((w) => w.id === id);
 }

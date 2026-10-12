@@ -77,11 +77,11 @@ async function runWrite(w: PendingWrite, replay: boolean): Promise<void> {
       return;
     }
     case "session": {
-      if (replay) {
-        const server = await loadTodaySession(w.session.learnerId, w.session.date);
-        if (server && doneCount(server.blocks) > doneCount(w.session.blocks)) return;
-      }
-      await upsertSession(w.session);
+      const server = await loadTodaySession(w.session.learnerId, w.session.date);
+      if (replay && server && doneCount(server.blocks) > doneCount(w.session.blocks)) return;
+      // A night a parent closed meanwhile ("Weekend set done" on Tonight) stays done.
+      const session = server?.status === "done" && w.session.status !== "done" ? { ...w.session, status: "done" as const, completed: true } : w.session;
+      await upsertSession(session);
       return;
     }
     case "reward":
