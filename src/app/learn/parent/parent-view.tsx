@@ -440,7 +440,7 @@ export default function ParentView({ kids, today, nowIso, coachEnabled }: Parent
 // Settings
 // ---------------------------------------------------------------------------
 
-const FIELD = "w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-base font-bold text-slate-900 outline-none focus:border-indigo-400";
+const FIELD = "min-h-[44px] w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-base font-bold text-slate-900 outline-none focus:border-indigo-400";
 const LABEL = "mb-1 block text-center text-[10px] font-semibold uppercase tracking-wider text-slate-400";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
